@@ -44,7 +44,6 @@ void Fluid::init(int count, std::uint32_t seed) {
     }
 
     pos_.clear();
-    vel_.clear();
     pos_.reserve(count);
 
     std::mt19937 rng(seed);
@@ -73,13 +72,28 @@ void Fluid::init(int count, std::uint32_t seed) {
     pressure_.assign(n, 0.0f);
     nextInCell_.assign(n, -1);
 
+    rebuildGrid();
+}
+
+void Fluid::setBounds(const glm::vec3& half) {
+    const glm::vec3 clamped = glm::max(half, glm::vec3(params_.h * 2.0f));
+    if (clamped == params_.boundsHalf && !cellHead_.empty()) return;
+    params_.boundsHalf = clamped;
+    rebuildGrid();
+}
+
+void Fluid::rebuildGrid() {
     cellSize_ = params_.h;
     const float pad = params_.h * 2.0f;
-    gridMin_ = glm::vec3(-params_.boundHalf - pad);
-    const float extent = 2.0f * (params_.boundHalf + pad);
-    const int dim = std::max(1, static_cast<int>(std::ceil(extent / cellSize_)));
-    gridDim_ = glm::ivec3(dim);
-    cellHead_.assign(static_cast<std::size_t>(dim) * dim * dim, -1);
+
+    gridMin_ = -(params_.boundsHalf + pad);
+    const glm::vec3 extent = 2.0f * (params_.boundsHalf + pad);
+
+    gridDim_ = glm::ivec3(std::max(1, static_cast<int>(std::ceil(extent.x / cellSize_))),
+                          std::max(1, static_cast<int>(std::ceil(extent.y / cellSize_))),
+                          std::max(1, static_cast<int>(std::ceil(extent.z / cellSize_))));
+
+    cellHead_.assign(static_cast<std::size_t>(gridDim_.x) * gridDim_.y * gridDim_.z, -1);
 }
 
 void Fluid::setAttractor(const glm::vec3& p, bool enabled) {
@@ -105,7 +119,7 @@ void Fluid::buildGrid() {
 }
 
 void Fluid::step(float dt) {
-    const std::size_t n = pos_.size();
+    const int n = static_cast<int>(pos_.size());
     if (n == 0) return;
 
     const FluidParams& P = params_;
@@ -122,7 +136,8 @@ void Fluid::step(float dt) {
 
     // Pass 1: density, then equation-of-state pressure. Negative pressure is
     // clamped away; letting it go tensile makes particles clump and blow up.
-    for (std::size_t i = 0; i < n; ++i) {
+#pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
         const glm::vec3 pi = pos_[i];
         const glm::vec3 rel = (pi - gridMin_) / cellSize_;
         const int bx = std::min(std::max(static_cast<int>(std::floor(rel.x)), 0), gridDim_.x - 1);
@@ -156,8 +171,9 @@ void Fluid::step(float dt) {
         pressure_[i] = std::max(0.0f, P.stiffness * (density_[i] - P.restDensity));
     }
 
-    // Pass 2: pressure + viscosity forces, then body forces.
-    for (std::size_t i = 0; i < n; ++i) {
+    // Pass 2: pressure, viscosity and cohesion, then body forces.
+#pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
         const glm::vec3 pi = pos_[i];
         const glm::vec3 vi = vel_[i];
         const float pri = pressure_[i];
@@ -169,7 +185,7 @@ void Fluid::step(float dt) {
 
         glm::vec3 fPress(0.0f);
         glm::vec3 fVisc(0.0f);
-        glm::vec3 fCohesion(0.0f);
+        glm::vec3 aCohesion(0.0f);
 
         for (int dz = -1; dz <= 1; ++dz) {
             const int cz = bz + dz;
@@ -182,7 +198,7 @@ void Fluid::step(float dt) {
                     if (cx < 0 || cx >= gridDim_.x) continue;
                     const int cell = (cz * gridDim_.y + cy) * gridDim_.x + cx;
                     for (int j = cellHead_[cell]; j != -1; j = nextInCell_[j]) {
-                        if (j == static_cast<int>(i)) continue;
+                        if (j == i) continue;
                         const glm::vec3 d = pi - pos_[j];
                         const float r2 = glm::dot(d, d);
                         if (r2 >= h2) continue;
@@ -196,9 +212,9 @@ void Fluid::step(float dt) {
                             const float gradMag = spikyCoef * (h - r) * (h - r);
                             fPress += -m * (pri + pressure_[j]) / (2.0f * rhoj) * gradMag * (d / r);
 
-                            // Cohesion pulls the other way, toward j.
-                            const float cohesion = cohesionSpline(r, h, cohesionCoef);
-                            fCohesion += -P.surfaceTension * m * m * cohesion * (d / r);
+                            // Acceleration directly: F/m_i = gamma * m_j * C.
+                            aCohesion += -P.surfaceTension * m *
+                                         cohesionSpline(r, h, cohesionCoef) * (d / r);
                         }
                         fVisc += P.viscosity * m * (vel_[j] - vi) / rhoj * (viscCoef * (h - r));
                     }
@@ -206,7 +222,7 @@ void Fluid::step(float dt) {
             }
         }
 
-        glm::vec3 a = (fPress + fVisc + fCohesion) / density_[i] + P.gravity;
+        glm::vec3 a = (fPress + fVisc) / density_[i] + aCohesion + P.gravity;
 
         if (attractOn_) {
             const glm::vec3 d = attractor_ - pi;
@@ -220,8 +236,7 @@ void Fluid::step(float dt) {
 
     // Integrate (semi-implicit Euler) and resolve the domain walls.
     const float damp = std::max(0.0f, 1.0f - P.drag * dt);
-    const float b = P.boundHalf;
-    for (std::size_t i = 0; i < n; ++i) {
+    for (int i = 0; i < n; ++i) {
         vel_[i] = clampLength((vel_[i] + accel_[i] * dt) * damp, P.maxSpeed);
         pos_[i] += vel_[i] * dt;
 
@@ -232,6 +247,7 @@ void Fluid::step(float dt) {
         }
 
         for (int k = 0; k < 3; ++k) {
+            const float b = P.boundsHalf[k];
             if (pos_[i][k] < -b) {
                 pos_[i][k] = -b;
                 if (vel_[i][k] < 0.0f) vel_[i][k] *= -P.restitution;

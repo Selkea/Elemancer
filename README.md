@@ -27,9 +27,21 @@ cmake --build build
 | Mouse | Moves the gravity well |
 | LMB | Pull harder |
 | RMB | Repel |
+| `[` `]` | Surface tension — how tightly droplets hold together |
+| `-` `=` | Well strength |
+| `,` `.` | Viscosity |
+| `;` `'` | Drag |
 | `G` | Toggle world gravity |
 | `R` | Reset |
 | `Esc` | Quit |
+
+The tuning keys scale their value while held, and the current values are shown
+in the title bar so a setting that feels right can be read straight off and
+made the default in `FluidParams`.
+
+The domain tracks the window: its half-extents are the view frustum measured at
+the near face of the tank, so the liquid is walled in by exactly what is on
+screen, at any window size.
 
 ## Running from VS Code
 

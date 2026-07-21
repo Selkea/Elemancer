@@ -8,40 +8,45 @@
 
 namespace elem {
 
-// Tunables for the SPH solver. The defaults are aimed at a cohesive blob that
-// gathers around a cursor gravity well inside a cube of half-extent boundHalf.
+// Tunables for the SPH solver. Defaults are aimed at droplet-scale liquid
+// gathering around a cursor gravity well.
 struct FluidParams {
-    float h           = 0.14f;    // smoothing radius
+    float h           = 0.050f;   // smoothing radius; particle spacing is h * 0.6
     float restDensity = 1000.0f;
-    float stiffness   = 180.0f;   // pressure gas constant
+
+    // Stiffness sets the speed of sound, which sets the CFL limit on dt.
+    // c ~ sqrt(stiffness), and dt must stay under ~0.4 * h / c. Raising this
+    // without shrinking dt makes the solver explode.
+    float stiffness   = 60.0f;
+
     float viscosity   = 5.0f;
     float mass        = 0.0f;     // 0 => derived from the initial packing
     float drag        = 0.35f;    // linear velocity damping, per second
-    float boundHalf   = 1.2f;     // half-extent of the cubic domain
-
-    // Akinci-style cohesion. This is what makes the body behave like a liquid
-    // rather than a cloud: it rounds the surface, lets it neck and pinch, and
-    // pulls stray droplets back in.
-    //
-    // It has to be strong. Pressure is clamped non-negative, so an expanded
-    // body has no restoring force of its own, and cohesion falls off with
-    // distance -- too little and expansion runs away into a diffuse cloud.
-    float surfaceTension = 400.0f;
     float restitution = 0.30f;    // wall bounce
     float maxSpeed    = 12.0f;    // clamps keep a stiff solver from exploding
     float maxAccel    = 3000.0f;
 
+    // Half-extents of the domain, per axis. Driven by the window so the liquid
+    // is bounded by what you can actually see.
+    glm::vec3 boundsHalf{2.6f, 1.6f, 0.7f};
+
     glm::vec3 gravity = glm::vec3(0.0f);  // world gravity, off by default
 
-    // Cursor gravity well: a softened inverse-square pull toward the attractor.
-    //
-    // Plummer softening, and the length matters enormously. It must be on the
-    // order of the body's own radius: any smaller and the well becomes a
-    // singularity buried inside the liquid that slingshots particles straight
-    // out through the far side. At this length the well is harmonic within the
-    // body and only falls off as inverse-square outside it.
-    float attractG    = 8.0f;
-    float attractSoft = 0.45f;
+    // Akinci cohesion, expressed as an acceleration (gamma * m_j * C), so the
+    // value is independent of h and particle spacing. Getting this wrong by
+    // dividing through density instead of mass makes it silently scale with
+    // spacing^3, so a change of scale quietly destroys surface tension.
+    float surfaceTension = 0.45f;
+
+    // Cursor gravity well, with Plummer softening. The softening length must
+    // be on the order of the body radius: any smaller and the well becomes a
+    // singularity buried inside the liquid that slingshots particles out
+    // through the far side.
+    // Inverse-square falls off hard across a window-sized domain: a droplet
+    // 2.5 units out feels only ~1.2 u/s^2 at G=8, so strays take far too long
+    // to come home. Hence the stronger default.
+    float attractG    = 12.0f;
+    float attractSoft = 0.30f;
 };
 
 // Muller-2003 SPH with a uniform grid for neighbour lookup. Deliberately free
@@ -50,6 +55,9 @@ class Fluid {
 public:
     void init(int count, std::uint32_t seed = 1337u);
     void step(float dt);
+
+    // Resizes the domain and rebuilds the grid. Safe to call every frame.
+    void setBounds(const glm::vec3& half);
 
     void setAttractor(const glm::vec3& p, bool enabled);
     const glm::vec3& attractor() const { return attractor_; }
@@ -63,6 +71,7 @@ public:
     FluidParams& params() { return params_; }
 
 private:
+    void rebuildGrid();
     void buildGrid();
     int cellIndex(const glm::vec3& p) const;
 

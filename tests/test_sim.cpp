@@ -21,7 +21,7 @@ int main() {
     float meanDensity = 0.0f;
     float spread = 0.0f;
     glm::vec3 centroid(0.0f);
-    const float bound = f.params().boundHalf + 1e-3f;
+    const glm::vec3 bound = f.params().boundsHalf + 1e-3f;
 
     for (std::size_t i = 0; i < f.size(); ++i) {
         const glm::vec3& p = f.positions()[i];
@@ -29,7 +29,8 @@ int main() {
             ++failures;
             continue;
         }
-        if (std::fabs(p.x) > bound || std::fabs(p.y) > bound || std::fabs(p.z) > bound) {
+        if (std::fabs(p.x) > bound.x || std::fabs(p.y) > bound.y ||
+            std::fabs(p.z) > bound.z) {
             ++failures;
         }
         centroid += p;

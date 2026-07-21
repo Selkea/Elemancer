@@ -17,22 +17,23 @@ namespace elem {
 class FluidRenderer {
 public:
     struct Settings {
-        // Must exceed the solver's particle spacing (h * 0.6), or the spheres
-        // never overlap and the surface reads as loose beads.
-        float radius = 0.090f;        // particle radius, world units
+        // Must exceed the solver's particle spacing (h * 0.6 = 0.03), or the
+        // spheres never overlap and the surface reads as loose beads. At 1.5x
+        // spacing a lone particle renders as a single water droplet.
+        float radius = 0.045f;        // particle radius, world units
         int blurIterations = 2;       // each iteration is one H + one V pass
 
-        // The blur has to be wide enough to span a particle on screen or the
-        // body still reads as beads. These spheres cover ~54px, so a 12-tap
-        // kernel barely touched them.
-        float blurRadius = 24.0f;     // taps either side
-        float sigmaSpatial = 11.0f;
+        // The blur has to be wide enough to span a particle on screen, but no
+        // wider or separate droplets smear together. These spheres cover
+        // ~17px, so the kernel is sized to match.
+        float blurRadius = 10.0f;     // taps either side
+        float sigmaSpatial = 4.5f;
         // Must exceed the depth gap between neighbouring particles (~one
         // radius) to fuse them, while staying small enough to keep silhouettes.
-        float sigmaDepth = 0.12f;
+        float sigmaDepth = 0.05f;
 
         float refractScale = 0.045f;
-        float absorption = 0.55f;
+        float absorption = 0.90f;
         glm::vec3 liquidColor{0.42f, 0.70f, 0.92f};
         glm::vec3 lightDirWorld{0.45f, 0.75f, 0.50f};
     };
