@@ -40,6 +40,11 @@ constexpr float kFovDegrees = 45.0f;
 constexpr float kCamDistance = 5.0f;
 constexpr float kDepthHalf = 0.7f;
 
+// Accumulated mouse-wheel movement, drained each frame to dolly the camera.
+// GLFW scroll only arrives through a callback, so it lands here.
+double g_scrollY = 0.0;
+void scrollCallback(GLFWwindow*, double, double yOffset) { g_scrollY += yOffset; }
+
 // 24-bit BMP. glReadPixels hands back bottom-up rows and BMP stores bottom-up,
 // so the rows go out in the order they arrive.
 bool saveBMP(const std::string& path, int w, int h, const std::vector<unsigned char>& rgb) {
@@ -163,7 +168,7 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity) {
 std::vector<std::string> hudControlLines() {
     return {
         "ELEMANCER",
-        "Mouse: move well    LMB: pull    RMB: repel    MMB drag: zoom",
+        "Mouse: move well    LMB: pull    RMB: repel    Scroll: zoom",
         "[ ] tension     - = well     , . viscosity     ; ' drag",
         "9 0 hold radius     O P clarity     K L spin",
         "G gravity     R reset     S save     Tab hide     Esc quit",
@@ -250,6 +255,7 @@ int main(int argc, char** argv) {
     }
     glGetError();  // GLEW's loader leaves a benign INVALID_ENUM behind.
     glfwSwapInterval(1);
+    glfwSetScrollCallback(win, scrollCallback);
 
     std::printf("[elemancer] GL %s | %s\n",
                 reinterpret_cast<const char*>(glGetString(GL_VERSION)),
@@ -413,7 +419,7 @@ int main(int argc, char** argv) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
 
-    std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel | MMB drag zoom\n");
+    std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel | scroll zoom\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
     std::printf("[elemancer] 9 0 hold radius | O P clarity | K L spin\n");
     std::printf("[elemancer] G gravity | R reset | S save | Tab hide HUD | Esc quit\n");
@@ -425,10 +431,8 @@ int main(int argc, char** argv) {
 
     KeyEdge gravityKey, resetKey, saveKey, hudKey;
 
-    // Camera dolly, driven by dragging the middle mouse button up and down.
+    // Camera dolly, driven by the scroll wheel.
     float camDistance = kCamDistance;
-    double lastCursorY = 0.0;
-    bool wasZooming = false;
 
     auto last = std::chrono::high_resolution_clock::now();
     double titleTimer = 0.0;
@@ -449,19 +453,12 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(win, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) continue;
 
-        // Middle-mouse drag dollies the camera. Multiplicative so the zoom feels
-        // even at any distance; dragging down pulls the camera back.
-        const bool zooming = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-        {
-            double mx = 0.0, my = 0.0;
-            glfwGetCursorPos(win, &mx, &my);
-            if (zooming && wasZooming) {
-                camDistance = std::clamp(
-                    camDistance * std::exp(static_cast<float>(my - lastCursorY) * 0.006f), 1.8f,
-                    24.0f);
-            }
-            wasZooming = zooming;
-            lastCursorY = my;
+        // Scroll to dolly the camera. Multiplicative so the zoom feels even at
+        // any distance; scroll up zooms in.
+        if (g_scrollY != 0.0) {
+            camDistance = std::clamp(
+                camDistance * std::exp(static_cast<float>(-g_scrollY) * 0.12f), 1.8f, 24.0f);
+            g_scrollY = 0.0;
         }
         const glm::mat4 view = viewFor(camDistance);
 
@@ -495,9 +492,7 @@ int main(int argc, char** argv) {
         const glm::mat4 proj = projFor(fbw, fbh);
         fluid.setBounds(
             boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), camDistance));
-        // While zooming, hold the well in place so the vertical drag does not
-        // also fling the water.
-        if (!zooming) fluid.setAttractor(cursorOnPlane(win, view, proj), true);
+        fluid.setAttractor(cursorOnPlane(win, view, proj), true);
 
         fluid.setWellScale(
             glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ? -1.0f
