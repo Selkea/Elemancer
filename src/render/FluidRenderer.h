@@ -33,8 +33,16 @@ public:
         float sigmaDepth = 0.05f;
 
         float refractScale = 0.045f;
-        float absorption = 0.90f;
-        glm::vec3 liquidColor{0.42f, 0.70f, 0.92f};
+
+        // How coloured the liquid is. absorption tints the light passing
+        // through it (Beer-Lambert, absorbing 1 - liquidColor, i.e. mostly
+        // red), and scatter adds the liquid's own colour back out of thick
+        // regions. Both were high enough that a small droplet read as blue
+        // jelly rather than near-clear water; kept low so colour only shows
+        // where the body is genuinely thick.
+        float absorption = 0.15f;
+        float scatter = 0.05f;
+        glm::vec3 liquidColor{0.86f, 0.91f, 0.94f};  // barely-there aqua
         glm::vec3 lightDirWorld{0.45f, 0.75f, 0.50f};
 
         // Diffuse spray, drawn additively over the surface.

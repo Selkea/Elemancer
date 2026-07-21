@@ -16,6 +16,7 @@ uniform vec3 uLightDirView;
 uniform vec3 uLiquidColor;
 uniform float uRefractScale;
 uniform float uAbsorption;
+uniform float uScatter;
 
 layout(location = 0) out vec4 outColor;
 
@@ -103,9 +104,9 @@ void main() {
 
     vec3 color = mix(refracted, reflected, fresnel);
 
-    // Light scattered back out of the body. Without it, thick regions absorb
-    // everything and go black instead of glowing with the liquid's own colour.
-    color += uLiquidColor * (1.0 - exp(-thickness * 1.2)) * 0.30;
+    // Light scattered back out of the body. Kept subtle: too much and the
+    // liquid glows with its own colour instead of showing what is behind it.
+    color += uLiquidColor * (1.0 - exp(-thickness * 1.2)) * uScatter;
 
     vec3 L = normalize(uLightDirView);
     vec3 H = normalize(L + V);

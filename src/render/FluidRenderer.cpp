@@ -330,6 +330,7 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     setVec3(progComposite_, "uLiquidColor", settings_.liquidColor);
     setFloat(progComposite_, "uRefractScale", settings_.refractScale);
     setFloat(progComposite_, "uAbsorption", settings_.absorption);
+    setFloat(progComposite_, "uScatter", settings_.scatter);
     drawQuad();
 
     // 6. Diffuse spray, additively over the shaded surface. Deliberately not

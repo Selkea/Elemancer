@@ -41,6 +41,7 @@ peak cursor speed of 5, begins to shed at 6, and tears properly at 8.
 | `[` `]` | Surface tension — how tightly droplets hold together |
 | `-` `=` | Well strength |
 | `9` `0` | Hold radius — the cursor speed at which the liquid starts to tear |
+| `O` `P` | Clarity — `O` toward clear glass, `P` toward deeper colour |
 | `,` `.` | Viscosity |
 | `;` `'` | Drag |
 | `G` | Toggle world gravity |

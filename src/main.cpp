@@ -326,6 +326,7 @@ int main(int argc, char** argv) {
 
     std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
+    std::printf("[elemancer] 9 0 hold radius | O P clarity\n");
     std::printf("[elemancer] G gravity | R reset | Esc quit\n");
 
     KeyEdge gravityKey, resetKey;
@@ -360,6 +361,10 @@ int main(int argc, char** argv) {
         // Hold radius is the breakup threshold: raise it and the liquid stays
         // together through faster flicks.
         holdAdjust(win, GLFW_KEY_9, GLFW_KEY_0, P.wellHoldRadius, 1.5f, frameDt, 0.2f, 6.0f);
+        // Clarity: absorption tints and darkens the light through the liquid,
+        // so O clears it toward glass and P deepens the colour.
+        holdAdjust(win, GLFW_KEY_O, GLFW_KEY_P, renderer.settings().absorption, 1.5f, frameDt,
+                   0.02f, 2.5f);
 
         if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
         if (gravityKey.justPressed(win, GLFW_KEY_G)) {
