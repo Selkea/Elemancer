@@ -1,0 +1,10 @@
+build/
+out/
+*.bmp
+*.png
+*.exe
+*.obj
+*.o
+*.a
+compile_commands.json
+.cache/

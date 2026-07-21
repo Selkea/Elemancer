@@ -1,0 +1,14 @@
+{
+  "cmake.generator": "Ninja",
+  "cmake.cmakePath": "C:/msys64/ucrt64/bin/cmake.exe",
+  "cmake.configureSettings": {
+    "CMAKE_MAKE_PROGRAM": "C:/msys64/ucrt64/bin/ninja.exe"
+  },
+  "cmake.environment": {
+    "PATH": "C:/msys64/ucrt64/bin;${env:PATH}"
+  },
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "C_Cpp.default.compilerPath": "C:/msys64/ucrt64/bin/g++.exe",
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json"
+}
