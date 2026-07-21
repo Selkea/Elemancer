@@ -25,7 +25,8 @@ if(OpenMP_CXX_FOUND)
   target_link_libraries(elemancer_sim PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
-add_executable(elemancer src/main.cpp src/render/FluidRenderer.cpp)
+add_executable(elemancer src/main.cpp src/render/FluidRenderer.cpp src/render/Hud.cpp)
+target_include_directories(elemancer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external)
 target_link_libraries(elemancer PRIVATE elemancer_sim OpenGL::GL glfw GLEW::GLEW)
 target_compile_definitions(elemancer PRIVATE
   ELEMANCER_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

@@ -8,3 +8,4 @@ out/
 *.a
 compile_commands.json
 .cache/
+elemancer.cfg

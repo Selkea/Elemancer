@@ -27,6 +27,9 @@ cmake --build build
 # Whip the well back and forth at a peak speed, in world units/s, and report
 # the worst stretch reached. Prints WHIP peakMeanRadius / peakStrays.
 ./build/elemancer --shot out.bmp --sweepspeed 8
+
+# Draw the controls HUD into the capture (otherwise HUD is interactive-only)
+./build/elemancer --shot out.bmp --hud
 ```
 
 Rest-packed `meanRadius` is 0.216, so a whip that leaves it at 0.216 with 0%
@@ -47,7 +50,17 @@ peak cursor speed of 5, begins to shed at 6, and tears properly at 8.
 | `;` `'` | Drag |
 | `G` | Toggle world gravity |
 | `R` | Reset |
+| `S` | Save settings now |
+| `Tab` | Show / hide the on-screen controls |
 | `Esc` | Quit |
+
+The tuning keys scale their value while held; the current values are shown both
+in an on-screen HUD panel and in the window title bar.
+
+Tuned values are **persisted** to `elemancer.cfg` (next to the source) on exit
+and on `S`, and reloaded on the next launch. The file is a plain `key value`
+list and can be hand-edited. `--shot` ignores it and always runs the compiled
+defaults, so headless verification stays reproducible.
 
 The tuning keys scale their value while held, and the current values are shown
 in the title bar so a setting that feels right can be read straight off and
@@ -91,7 +104,8 @@ workspace needs the same files at that parent's root.
 ## Layout
 
 - `src/sim/` — SPH solver. No graphics dependency, so it runs headless in tests.
-- `src/main.cpp` — window, input, and the particle draw pass.
+- `src/main.cpp` — window, input, settings persistence, and the draw loop.
+- `src/render/Hud.*` — controls overlay, via `external/stb_easy_font.h`.
 - `shaders/` — loaded from disk at runtime; edit and rerun without recompiling.
 - `tests/` — headless solver checks.
 

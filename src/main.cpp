@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "render/FluidRenderer.h"
+#include "render/Hud.h"
 #include "sim/Fluid.h"
 
 namespace {
@@ -117,6 +118,53 @@ glm::vec3 cursorOnPlane(GLFWwindow* win, const glm::mat4& view, const glm::mat4&
     return o + d * (-o.z / d.z);
 }
 
+// The live-tunable values, persisted between interactive sessions so a setting
+// dialled in by feel survives a restart. Deliberately not loaded in --shot
+// mode, which stays on the compiled defaults so headless verification is
+// reproducible. The file is a plain "key value" list, hand-editable.
+void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity) {
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) {
+        std::fprintf(stderr, "[elemancer] could not write %s\n", path.c_str());
+        return;
+    }
+    f << "tension " << p.surfaceTension << "\n"
+      << "well " << p.wellStiffness << "\n"
+      << "viscosity " << p.viscosity << "\n"
+      << "drag " << p.drag << "\n"
+      << "holdRadius " << p.wellHoldRadius << "\n"
+      << "clarity " << clarity << "\n"
+      << "spin " << p.spinRate << "\n";
+}
+
+bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity) {
+    std::ifstream f(path);
+    if (!f) return false;
+
+    std::string key;
+    float v = 0.0f;
+    while (f >> key >> v) {
+        if (key == "tension") p.surfaceTension = v;
+        else if (key == "well") p.wellStiffness = v;
+        else if (key == "viscosity") p.viscosity = v;
+        else if (key == "drag") p.drag = v;
+        else if (key == "holdRadius") p.wellHoldRadius = v;
+        else if (key == "clarity") clarity = v;
+        else if (key == "spin") p.spinRate = v;
+    }
+    return true;
+}
+
+std::vector<std::string> hudControlLines() {
+    return {
+        "ELEMANCER",
+        "Mouse: move well    LMB: pull    RMB: repel",
+        "[ ] tension     - = well     , . viscosity     ; ' drag",
+        "9 0 hold radius     O P clarity     K L spin",
+        "G gravity     R reset     S save     Tab hide     Esc quit",
+    };
+}
+
 // Hold-to-scale a tunable. Exponential so a value stays in the same relative
 // ballpark whichever end of its range it is at.
 void holdAdjust(GLFWwindow* win, int keyDown, int keyUp, float& value, float rate, float dt,
@@ -146,6 +194,7 @@ int main(int argc, char** argv) {
     float tensionOverride = -1.0f;
     float wellOverride = -1.0f;
     float sweepSpeed = 4.0f;  // world units/s the shot drags the well at
+    bool drawHudShot = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -162,6 +211,8 @@ int main(int argc, char** argv) {
             wellOverride = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--sweepspeed" && i + 1 < argc) {
             sweepSpeed = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--hud") {
+            drawHudShot = true;
         }
     }
 
@@ -290,6 +341,12 @@ int main(int argc, char** argv) {
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
                         projFor(fbw, fbh), fbw, fbh, 6.0f);
+        if (drawHudShot) {
+            elem::Hud hud;
+            hud.init();
+            hud.draw(hudControlLines(), fbw, fbh);
+            hud.shutdown();
+        }
         glFinish();
 
         std::vector<unsigned char> pixels(static_cast<std::size_t>(fbw) * fbh * 3);
@@ -341,12 +398,23 @@ int main(int argc, char** argv) {
         return ok ? 0 : 1;
     }
 
+    // Restore any values tuned in a previous session, then keep them saved.
+    const std::string cfgPath = std::string(ELEMANCER_ASSET_DIR) + "/elemancer.cfg";
+    if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption)) {
+        std::printf("[elemancer] loaded settings from elemancer.cfg\n");
+    }
+
     std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
     std::printf("[elemancer] 9 0 hold radius | O P clarity | K L spin\n");
-    std::printf("[elemancer] G gravity | R reset | Esc quit\n");
+    std::printf("[elemancer] G gravity | R reset | S save | Tab hide HUD | Esc quit\n");
 
-    KeyEdge gravityKey, resetKey;
+    elem::Hud hud;
+    if (!hud.init()) std::fprintf(stderr, "[elemancer] hud init failed\n");
+    bool showHud = true;
+    const std::vector<std::string> hudLines = hudControlLines();
+
+    KeyEdge gravityKey, resetKey, saveKey, hudKey;
 
     auto last = std::chrono::high_resolution_clock::now();
     double titleTimer = 0.0;
@@ -388,6 +456,11 @@ int main(int argc, char** argv) {
         if (gravityKey.justPressed(win, GLFW_KEY_G)) {
             P.gravity = (P.gravity.y < -0.1f) ? glm::vec3(0.0f) : glm::vec3(0.0f, -4.0f, 0.0f);
         }
+        if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
+        if (saveKey.justPressed(win, GLFW_KEY_S)) {
+            saveConfig(cfgPath, P, renderer.settings().absorption);
+            std::printf("[elemancer] saved settings to elemancer.cfg\n");
+        }
 
         const glm::mat4 proj = projFor(fbw, fbh);
         fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh)));
@@ -401,6 +474,7 @@ int main(int argc, char** argv) {
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view, proj,
                         fbw, fbh, static_cast<float>(glfwGetTime()));
+        if (showHud) hud.draw(hudLines, fbw, fbh);
         glfwSwapBuffers(win);
 
         fpsAccum += frameDt;
@@ -413,16 +487,23 @@ int main(int argc, char** argv) {
         titleTimer += frameDt;
         if (titleTimer > 0.2) {
             titleTimer = 0.0;
-            char title[256];
+            char title[320];
             std::snprintf(title, sizeof title,
                           "Elemancer  |  tension %.3f  |  well %.1f  |  visc %.1f  |  drag %.2f"
+                          "  |  hold %.2f  |  clarity %.2f  |  spin %.1f"
                           "  |  %zu drops  |  %zu spray  |  %.0f fps",
-                          P.surfaceTension, P.wellStiffness, P.viscosity, P.drag, fluid.size(),
+                          P.surfaceTension, P.wellStiffness, P.viscosity, P.drag, P.wellHoldRadius,
+                          renderer.settings().absorption, P.spinRate, fluid.size(),
                           fluid.sprayCount(), fps);
             glfwSetWindowTitle(win, title);
         }
     }
 
+    // Persist whatever was tuned this session.
+    saveConfig(cfgPath, fluid.params(), renderer.settings().absorption);
+    std::printf("[elemancer] saved settings to elemancer.cfg\n");
+
+    hud.shutdown();
     renderer.shutdown();
     glfwDestroyWindow(win);
     glfwTerminate();
