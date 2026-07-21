@@ -90,10 +90,15 @@ bool saveBMP(const std::string& path, int w, int h, const std::vector<unsigned c
 // The domain tracks the window: half-extents are the view frustum measured at
 // the near face of the tank, so the liquid is walled in by exactly what is on
 // screen regardless of how the window is resized.
-glm::vec3 boundsForView(float aspect) {
+glm::vec3 boundsForView(float aspect, float camDistance) {
     const float halfH =
-        (kCamDistance - kDepthHalf) * std::tan(glm::radians(kFovDegrees) * 0.5f);
+        (camDistance - kDepthHalf) * std::tan(glm::radians(kFovDegrees) * 0.5f);
     return glm::vec3(halfH * aspect * 0.97f, halfH * 0.97f, kDepthHalf);
+}
+
+glm::mat4 viewFor(float camDistance) {
+    return glm::lookAt(glm::vec3(0.0f, 0.0f, camDistance), glm::vec3(0.0f),
+                       glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
 // Unproject the cursor onto the z=0 plane, which is where the well lives.
@@ -158,7 +163,7 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity) {
 std::vector<std::string> hudControlLines() {
     return {
         "ELEMANCER",
-        "Mouse: move well    LMB: pull    RMB: repel",
+        "Mouse: move well    LMB: pull    RMB: repel    MMB drag: zoom",
         "[ ] tension     - = well     , . viscosity     ; ' drag",
         "9 0 hold radius     O P clarity     K L spin",
         "G gravity     R reset     S save     Tab hide     Esc quit",
@@ -195,6 +200,7 @@ int main(int argc, char** argv) {
     float wellOverride = -1.0f;
     float sweepSpeed = 4.0f;  // world units/s the shot drags the well at
     bool drawHudShot = false;
+    float distOverride = -1.0f;  // camera distance for the shot; MMB does this live
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -213,6 +219,8 @@ int main(int argc, char** argv) {
             sweepSpeed = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--hud") {
             drawHudShot = true;
+        } else if (a == "--dist" && i + 1 < argc) {
+            distOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -260,8 +268,8 @@ int main(int argc, char** argv) {
     std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
                 fluid.params().surfaceTension, fluid.params().wellStiffness);
 
-    const glm::vec3 eye(0.0f, 0.0f, kCamDistance);
-    const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    const float shotDist = distOverride > 0.0f ? distOverride : kCamDistance;
+    const glm::mat4 view = viewFor(shotDist);
 
     const auto projFor = [](int fbw, int fbh) {
         return glm::perspective(glm::radians(kFovDegrees),
@@ -271,7 +279,8 @@ int main(int argc, char** argv) {
     if (shotMode) {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(win, &fbw, &fbh);
-        fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh)));
+        fluid.setBounds(
+            boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), shotDist));
 
         // Settle, then whip the well back and forth along x at a known peak
         // speed. It has to be a reversing path, not a circle: on a circular
@@ -404,7 +413,7 @@ int main(int argc, char** argv) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
 
-    std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel\n");
+    std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel | MMB drag zoom\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
     std::printf("[elemancer] 9 0 hold radius | O P clarity | K L spin\n");
     std::printf("[elemancer] G gravity | R reset | S save | Tab hide HUD | Esc quit\n");
@@ -415,6 +424,11 @@ int main(int argc, char** argv) {
     const std::vector<std::string> hudLines = hudControlLines();
 
     KeyEdge gravityKey, resetKey, saveKey, hudKey;
+
+    // Camera dolly, driven by dragging the middle mouse button up and down.
+    float camDistance = kCamDistance;
+    double lastCursorY = 0.0;
+    bool wasZooming = false;
 
     auto last = std::chrono::high_resolution_clock::now();
     double titleTimer = 0.0;
@@ -434,6 +448,22 @@ int main(int argc, char** argv) {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(win, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) continue;
+
+        // Middle-mouse drag dollies the camera. Multiplicative so the zoom feels
+        // even at any distance; dragging down pulls the camera back.
+        const bool zooming = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+        {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(win, &mx, &my);
+            if (zooming && wasZooming) {
+                camDistance = std::clamp(
+                    camDistance * std::exp(static_cast<float>(my - lastCursorY) * 0.006f), 1.8f,
+                    24.0f);
+            }
+            wasZooming = zooming;
+            lastCursorY = my;
+        }
+        const glm::mat4 view = viewFor(camDistance);
 
         elem::FluidParams& P = fluid.params();
         holdAdjust(win, GLFW_KEY_LEFT_BRACKET, GLFW_KEY_RIGHT_BRACKET, P.surfaceTension, 1.5f,
@@ -463,8 +493,11 @@ int main(int argc, char** argv) {
         }
 
         const glm::mat4 proj = projFor(fbw, fbh);
-        fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh)));
-        fluid.setAttractor(cursorOnPlane(win, view, proj), true);
+        fluid.setBounds(
+            boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), camDistance));
+        // While zooming, hold the well in place so the vertical drag does not
+        // also fling the water.
+        if (!zooming) fluid.setAttractor(cursorOnPlane(win, view, proj), true);
 
         fluid.setWellScale(
             glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ? -1.0f

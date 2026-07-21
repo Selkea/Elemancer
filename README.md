@@ -41,6 +41,7 @@ peak cursor speed of 5, begins to shed at 6, and tears properly at 8.
 | Mouse | Moves the gravity well |
 | LMB | Pull harder |
 | RMB | Repel |
+| MMB drag | Zoom the camera (drag up to zoom in) |
 | `[` `]` | Surface tension — how tightly droplets hold together |
 | `-` `=` | Well strength |
 | `9` `0` | Hold radius — the cursor speed at which the liquid starts to tear |
