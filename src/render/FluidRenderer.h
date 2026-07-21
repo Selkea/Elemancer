@@ -32,6 +32,13 @@ public:
         // radius) to fuse them, while staying small enough to keep silhouettes.
         float sigmaDepth = 0.05f;
 
+        // Temporal smoothing of the surface, to stop it boiling while the body
+        // moves or rotates. Blend is how much of the previous frame is kept;
+        // maxDelta rejects the history where the surface genuinely moved, so a
+        // fast flick does not ghost.
+        float temporalBlend = 0.65f;
+        float temporalMaxDelta = 0.22f;
+
         float refractScale = 0.045f;
 
         // How coloured the liquid is. absorption tints the light passing
@@ -78,12 +85,18 @@ private:
     GLuint progBlur_ = 0;
     GLuint progComposite_ = 0;
     GLuint progSpray_ = 0;
+    GLuint progTemporal_ = 0;
 
     GLuint fboScene_ = 0, fboDepth_ = 0, fboThickness_ = 0;
     GLuint fboBlur_[2] = {0, 0};
     GLuint texScene_ = 0, texDepth_ = 0, texThickness_ = 0;
     GLuint texBlur_[2] = {0, 0};
     GLuint rboDepth_ = 0;
+
+    // History for temporal surface smoothing, ping-ponged each frame.
+    GLuint fboHist_[2] = {0, 0};
+    GLuint texHist_[2] = {0, 0};
+    int histIndex_ = 0;
 
     GLuint vaoParticles_ = 0, vboParticles_ = 0, vaoQuad_ = 0;
     GLuint vaoSpray_ = 0, vboSpray_ = 0;

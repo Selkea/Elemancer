@@ -30,6 +30,11 @@ cmake --build build
 
 # Draw the controls HUD into the capture (otherwise HUD is interactive-only)
 ./build/elemancer --shot out.bmp --hud
+
+# Measure surface boiling: frame-to-frame pixel diff of a spinning body.
+# --notemporal disables temporal smoothing for an A/B.
+./build/elemancer --shot out.bmp --sweepspeed 0 --jitter
+./build/elemancer --shot out.bmp --sweepspeed 0 --jitter --notemporal
 ```
 
 Rest-packed `meanRadius` is 0.216, so a whip that leaves it at 0.216 with 0%
@@ -89,6 +94,9 @@ workspace needs the same files at that parent's root.
 ## Techniques and references
 
 - **Screen-space fluid surface** — Green (NVIDIA), "Screen Space Fluid Rendering".
+  Depth is bilaterally smoothed, then temporally smoothed against the previous
+  frame (with a disocclusion guard) so the surface does not boil while the body
+  moves or rotates.
 - **Spray** — Ihmsen et al. 2012, "Unified Spray, Foam and Bubbles for
   Particle-Based Fluids". Diffuse particles are a post-process over the SPH
   state with no forces between them, generated from a trapped-air potential

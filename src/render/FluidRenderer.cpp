@@ -169,17 +169,21 @@ bool FluidRenderer::buildPrograms() {
         "composite");
     progSpray_ = linkProgram(readFile(assetDir_ + "/shaders/spray.vert"),
                              readFile(assetDir_ + "/shaders/spray.frag"), "spray");
+    progTemporal_ =
+        linkProgram(fullscreenVs, readFile(assetDir_ + "/shaders/temporal.frag"), "temporal");
 
     return progBackground_ && progDepth_ && progThickness_ && progBlur_ && progComposite_ &&
-           progSpray_;
+           progSpray_ && progTemporal_;
 }
 
 void FluidRenderer::releaseTargets() {
-    const GLuint fbos[] = {fboScene_, fboDepth_, fboThickness_, fboBlur_[0], fboBlur_[1]};
+    const GLuint fbos[] = {fboScene_,   fboDepth_,   fboThickness_, fboBlur_[0],
+                           fboBlur_[1], fboHist_[0], fboHist_[1]};
     for (GLuint f : fbos) {
         if (f) glDeleteFramebuffers(1, &f);
     }
-    const GLuint texs[] = {texScene_, texDepth_, texThickness_, texBlur_[0], texBlur_[1]};
+    const GLuint texs[] = {texScene_,   texDepth_,   texThickness_, texBlur_[0],
+                           texBlur_[1], texHist_[0], texHist_[1]};
     for (GLuint t : texs) {
         if (t) glDeleteTextures(1, &t);
     }
@@ -187,6 +191,7 @@ void FluidRenderer::releaseTargets() {
 
     fboScene_ = fboDepth_ = fboThickness_ = fboBlur_[0] = fboBlur_[1] = 0;
     texScene_ = texDepth_ = texThickness_ = texBlur_[0] = texBlur_[1] = 0;
+    fboHist_[0] = fboHist_[1] = texHist_[0] = texHist_[1] = 0;
     rboDepth_ = 0;
 }
 
@@ -205,12 +210,24 @@ void FluidRenderer::ensureTargets(int w, int h) {
     texThickness_ = makeColorTexture(w, h, GL_R16F);
     texBlur_[0] = makeColorTexture(w, h, GL_R32F);
     texBlur_[1] = makeColorTexture(w, h, GL_R32F);
+    texHist_[0] = makeColorTexture(w, h, GL_R32F);
+    texHist_[1] = makeColorTexture(w, h, GL_R32F);
 
     fboScene_ = makeFbo(texScene_, 0);
     fboDepth_ = makeFbo(texDepth_, rboDepth_);
     fboThickness_ = makeFbo(texThickness_, 0);
     fboBlur_[0] = makeFbo(texBlur_[0], 0);
     fboBlur_[1] = makeFbo(texBlur_[1], 0);
+    fboHist_[0] = makeFbo(texHist_[0], 0);
+    fboHist_[1] = makeFbo(texHist_[1], 0);
+
+    // Seed the history as empty (background) so the first frame is all "current".
+    const float bg[4] = {kBackgroundDepth, 0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 2; ++i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fboHist_[i]);
+        glClearBufferfv(GL_COLOR, 0, bg);
+    }
+    histIndex_ = 0;
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -294,6 +311,30 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
         drawQuad();
 
         source = texBlur_[1];
+    }
+
+    // 3b. Temporal resolve: blend the smoothed depth toward last frame's, which
+    // stops the surface boiling while the body moves or spins. The result also
+    // becomes next frame's history, ping-ponged between the two hist targets.
+    if (settings_.temporalBlend > 0.0f) {
+        const int cur = histIndex_;
+        const int prev = 1 - histIndex_;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, fboHist_[cur]);
+        glUseProgram(progTemporal_);
+        setInt(progTemporal_, "uCurrent", 0);
+        setInt(progTemporal_, "uHistory", 1);
+        setFloat(progTemporal_, "uBlend", settings_.temporalBlend);
+        setFloat(progTemporal_, "uMaxDelta", settings_.temporalMaxDelta);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, source);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, texHist_[prev]);
+        drawQuad();
+        glActiveTexture(GL_TEXTURE0);
+
+        source = texHist_[cur];
+        histIndex_ = prev;
     }
 
     // 4. Thickness, accumulated additively with depth testing off.
@@ -384,8 +425,8 @@ void FluidRenderer::shutdown() {
     if (vaoSpray_) glDeleteVertexArrays(1, &vaoSpray_);
     if (vaoQuad_) glDeleteVertexArrays(1, &vaoQuad_);
 
-    const GLuint progs[] = {progBackground_, progDepth_, progThickness_, progBlur_,
-                            progComposite_, progSpray_};
+    const GLuint progs[] = {progBackground_, progDepth_,     progThickness_, progBlur_,
+                            progComposite_,  progSpray_, progTemporal_};
     for (GLuint p : progs) {
         if (p) glDeleteProgram(p);
     }

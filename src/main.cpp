@@ -205,7 +205,9 @@ int main(int argc, char** argv) {
     float wellOverride = -1.0f;
     float sweepSpeed = 4.0f;  // world units/s the shot drags the well at
     bool drawHudShot = false;
-    float distOverride = -1.0f;  // camera distance for the shot; MMB does this live
+    float distOverride = -1.0f;  // camera distance for the shot; scroll does this live
+    bool measureJitter = false;  // report frame-to-frame pixel diff of a moving body
+    bool noTemporal = false;     // disable temporal surface smoothing, for A/B
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -226,6 +228,10 @@ int main(int argc, char** argv) {
             drawHudShot = true;
         } else if (a == "--dist" && i + 1 < argc) {
             distOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--jitter") {
+            measureJitter = true;
+        } else if (a == "--notemporal") {
+            noTemporal = true;
         }
     }
 
@@ -266,6 +272,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[elemancer] renderer init failed\n");
         return 1;
     }
+    if (noTemporal) renderer.settings().temporalBlend = 0.0f;
 
     elem::Fluid fluid;
     fluid.init(particleCount);
@@ -406,6 +413,26 @@ int main(int argc, char** argv) {
                     shotPath.c_str(), fbw, fbh, sweepSpeed, centroid.x, centroid.y, centroid.z,
                     spread, glm::length(centroid - wellPos),
                     100.0f * strays / static_cast<float>(fluid.size()), omegaAxial, ok ? 1 : 0);
+
+        // Advance one frame and re-render, then report how much the image
+        // changed. A boiling surface makes consecutive frames differ a lot even
+        // when the body is only turning gently, so this is a headless proxy for
+        // "smooth while rotating".
+        if (measureJitter) {
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                            projFor(fbw, fbh), fbw, fbh, 6.0f);
+            glFinish();
+            std::vector<unsigned char> pixels2(pixels.size());
+            glReadPixels(0, 0, fbw, fbh, GL_RGB, GL_UNSIGNED_BYTE, pixels2.data());
+
+            double sum = 0.0;
+            for (std::size_t i = 0; i < pixels.size(); ++i) {
+                sum += std::abs(static_cast<int>(pixels[i]) - static_cast<int>(pixels2[i]));
+            }
+            std::printf("JITTER temporal=%d meanAbsDiff=%.4f\n", noTemporal ? 0 : 1,
+                        sum / static_cast<double>(pixels.size()));
+        }
 
         renderer.shutdown();
         glfwDestroyWindow(win);
