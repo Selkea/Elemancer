@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "render/FluidRenderer.h"
@@ -144,6 +145,7 @@ int main(int argc, char** argv) {
     int shotFrames = 420;
     float tensionOverride = -1.0f;
     float wellOverride = -1.0f;
+    float sweepSpeed = 4.0f;  // world units/s the shot drags the well at
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -158,6 +160,8 @@ int main(int argc, char** argv) {
             tensionOverride = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--well" && i + 1 < argc) {
             wellOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--sweepspeed" && i + 1 < argc) {
+            sweepSpeed = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -201,9 +205,9 @@ int main(int argc, char** argv) {
     elem::Fluid fluid;
     fluid.init(particleCount);
     if (tensionOverride > 0.0f) fluid.params().surfaceTension = tensionOverride;
-    if (wellOverride > 0.0f) fluid.params().attractG = wellOverride;
+    if (wellOverride > 0.0f) fluid.params().wellStiffness = wellOverride;
     std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
-                fluid.params().surfaceTension, fluid.params().attractG);
+                fluid.params().surfaceTension, fluid.params().wellStiffness);
 
     const glm::vec3 eye(0.0f, 0.0f, kCamDistance);
     const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -218,29 +222,59 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(win, &fbw, &fbh);
         fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh)));
 
-        // Settle, sweep the well in an arc, then snap it back to the centre and
-        // capture while the body is still rushing in. A settled blob only
-        // proves it is round; one caught mid-motion proves it is liquid,
-        // because it lags, stretches and recoils.
-        const int settle = shotFrames * 45 / 100;
-        const int sweep = shotFrames * 40 / 100;
-        const int recover = shotFrames - settle - sweep;
+        // Settle, then whip the well back and forth along x at a known peak
+        // speed. It has to be a reversing path, not a circle: on a circular
+        // sweep the body simply orbits inside the circle and cuts the corner,
+        // so the lag is bounded by the sweep radius and no speed can ever
+        // stretch it far enough to tear. Reversing lets the lag grow with
+        // speed without bound, which is what actually happens when a cursor
+        // is flicked.
+        const float kWhipAmplitude = 1.8f;
+        const float frameDur = static_cast<float>(kSubSteps) * kDt;
 
-        fluid.setAttractor(glm::vec3(0.0f), true);
+        const int settle = shotFrames / 2;
+        const int sweep = shotFrames - settle;
+
+        glm::vec3 wellPos(0.0f);
+        fluid.setAttractor(wellPos, true);
         for (int i = 0; i < settle; ++i) {
             for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
         }
+
+        // Sampling one instant makes the result depend on where in the
+        // oscillation the capture lands, so track the worst stretch reached
+        // across the whole sweep instead.
+        const auto measure = [&fluid]() {
+            const float n = static_cast<float>(fluid.size());
+            glm::vec3 c(0.0f);
+            for (const glm::vec3& p : fluid.positions()) c += p;
+            c /= n;
+            float sp = 0.0f;
+            for (const glm::vec3& p : fluid.positions()) sp += glm::length(p - c);
+            sp /= n;
+            int stray = 0;
+            for (const glm::vec3& p : fluid.positions()) {
+                if (glm::length(p - c) > 2.5f * sp) ++stray;
+            }
+            return std::pair<float, float>{sp, 100.0f * stray / n};
+        };
+
+        float peakSpread = 0.0f;
+        float peakStrays = 0.0f;
+
+        const float omega = sweepSpeed / kWhipAmplitude;  // peak speed = A * omega
         for (int i = 0; i < sweep; ++i) {
-            const float t = static_cast<float>(i) / static_cast<float>(sweep);
-            const float angle = t * 6.2831853f * 0.9f;
-            fluid.setAttractor(glm::vec3(0.8f * std::cos(angle), 0.5f * std::sin(angle), 0.0f),
-                               true);
+            const float t = static_cast<float>(i) * frameDur;
+            wellPos = glm::vec3(kWhipAmplitude * std::sin(omega * t), 0.0f, 0.0f);
+            fluid.setAttractor(wellPos, true);
             for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+
+            const auto [sp, st] = measure();
+            peakSpread = std::max(peakSpread, sp);
+            peakStrays = std::max(peakStrays, st);
         }
-        fluid.setAttractor(glm::vec3(0.0f), true);
-        for (int i = 0; i < recover; ++i) {
-            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
-        }
+        std::printf("WHIP peakSpeed=%.1f peakMeanRadius=%.3f peakStrays=%.1f%%\n", sweepSpeed,
+                    peakSpread, peakStrays);
 
         renderer.render(fluid.positions(), view, projFor(fbw, fbh), fbw, fbh);
         glFinish();
@@ -257,11 +291,19 @@ int main(int argc, char** argv) {
         for (const glm::vec3& p : fluid.positions()) spread += glm::length(p - centroid);
         spread /= static_cast<float>(fluid.size());
 
+        // Fraction of the body still travelling with the bulk: anything more
+        // than a body-radius away from the centroid has torn off.
+        int strays = 0;
+        for (const glm::vec3& p : fluid.positions()) {
+            if (glm::length(p - centroid) > 2.5f * spread) ++strays;
+        }
+
         const bool ok = saveBMP(shotPath, fbw, fbh, pixels);
-        std::printf("SHOT file=%s %dx%d centroid=(%.3f, %.3f, %.3f) meanRadius=%.3f"
-                    " wellLag=%.3f saved=%d\n",
-                    shotPath.c_str(), fbw, fbh, centroid.x, centroid.y, centroid.z, spread,
-                    glm::length(centroid), ok ? 1 : 0);
+        std::printf("SHOT file=%s %dx%d sweepSpeed=%.1f centroid=(%.3f, %.3f, %.3f)"
+                    " meanRadius=%.3f wellLag=%.3f strays=%.1f%% saved=%d\n",
+                    shotPath.c_str(), fbw, fbh, sweepSpeed, centroid.x, centroid.y, centroid.z,
+                    spread, glm::length(centroid - wellPos),
+                    100.0f * strays / static_cast<float>(fluid.size()), ok ? 1 : 0);
 
         renderer.shutdown();
         glfwDestroyWindow(win);
@@ -273,7 +315,6 @@ int main(int argc, char** argv) {
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
     std::printf("[elemancer] G gravity | R reset | Esc quit\n");
 
-    const float baseG = fluid.params().attractG;
     KeyEdge gravityKey, resetKey;
 
     auto last = std::chrono::high_resolution_clock::now();
@@ -298,10 +339,14 @@ int main(int argc, char** argv) {
         elem::FluidParams& P = fluid.params();
         holdAdjust(win, GLFW_KEY_LEFT_BRACKET, GLFW_KEY_RIGHT_BRACKET, P.surfaceTension, 1.5f,
                    frameDt, 0.005f, 2.5f);
-        holdAdjust(win, GLFW_KEY_MINUS, GLFW_KEY_EQUAL, P.attractG, 1.5f, frameDt, 0.2f, 40.0f);
+        holdAdjust(win, GLFW_KEY_MINUS, GLFW_KEY_EQUAL, P.wellStiffness, 1.5f, frameDt, 3.0f,
+                   200.0f);
         holdAdjust(win, GLFW_KEY_COMMA, GLFW_KEY_PERIOD, P.viscosity, 1.5f, frameDt, 0.1f, 60.0f);
         holdAdjust(win, GLFW_KEY_SEMICOLON, GLFW_KEY_APOSTROPHE, P.drag, 1.5f, frameDt, 0.01f,
                    5.0f);
+        // Hold radius is the breakup threshold: raise it and the liquid stays
+        // together through faster flicks.
+        holdAdjust(win, GLFW_KEY_9, GLFW_KEY_0, P.wellHoldRadius, 1.5f, frameDt, 0.2f, 6.0f);
 
         if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
         if (gravityKey.justPressed(win, GLFW_KEY_G)) {
@@ -312,14 +357,11 @@ int main(int argc, char** argv) {
         fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh)));
         fluid.setAttractor(cursorOnPlane(win, view, proj), true);
 
-        const float wellScale =
+        fluid.setWellScale(
             glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ? -1.0f
             : glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS ? 3.0f
-                                                                            : 1.0f;
-        const float wellSetting = P.attractG;
-        P.attractG = wellSetting * wellScale;
+                                                                            : 1.0f);
         for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
-        P.attractG = wellSetting;
 
         renderer.render(fluid.positions(), view, proj, fbw, fbh);
         glfwSwapBuffers(win);
@@ -338,7 +380,8 @@ int main(int argc, char** argv) {
             std::snprintf(title, sizeof title,
                           "Elemancer  |  tension %.3f  |  well %.1f  |  visc %.1f  |  drag %.2f"
                           "  |  %zu drops  |  %.0f fps",
-                          P.surfaceTension, wellSetting, P.viscosity, P.drag, fluid.size(), fps);
+                          P.surfaceTension, P.wellStiffness, P.viscosity, P.drag, fluid.size(),
+                          fps);
             glfwSetWindowTitle(win, title);
         }
     }

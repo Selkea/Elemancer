@@ -135,6 +135,18 @@ void Fluid::step(float dt) {
 
     buildGrid();
 
+    // Bulk position and velocity. Damping against the mean velocity rather
+    // than each particle's own leaves internal motion untouched, so the slosh
+    // survives while the body's drift onto the cursor is settled.
+    glm::vec3 posBulk(0.0f);
+    glm::vec3 velBulk(0.0f);
+    for (int i = 0; i < n; ++i) {
+        posBulk += pos_[i];
+        velBulk += vel_[i];
+    }
+    posBulk /= static_cast<float>(n);
+    velBulk /= static_cast<float>(n);
+
     // Pass 1: density, then equation-of-state pressure. Negative pressure is
     // clamped away; letting it go tensile makes particles clump and blow up.
 #pragma omp parallel for schedule(static)
@@ -234,9 +246,29 @@ void Fluid::step(float dt) {
 
         if (attractOn_) {
             const glm::vec3 d = attractor_ - pi;
-            const float soft = P.attractSoft * P.attractSoft;
-            const float inv = 1.0f / std::pow(glm::dot(d, d) + soft, 1.5f);
-            a += P.attractG * d * inv;
+            if (wellScale_ >= 0.0f) {
+                // Uniform on the whole body: translates without squeezing.
+                const glm::vec3 aBulk =
+                    P.wellStiffness * wellScale_ * (attractor_ - posBulk) -
+                    P.wellDamping * velBulk;
+
+                // Per-particle, springy inside the hold radius and decaying as
+                // 1/r outside it, so a lagging tail is pulled progressively
+                // less and eventually lets go.
+                float local = P.wellLocal * wellScale_;
+                const float r = glm::length(d);
+                if (r > P.wellHoldRadius) {
+                    const float f = P.wellHoldRadius / r;
+                    local *= f * f;
+                }
+
+                a += clampLength(aBulk + local * d, P.wellMaxAccel);
+            } else {
+                // Repel with a bounded push that fades with distance. Running
+                // the spring backwards would grow without limit and pin
+                // everything to the walls.
+                a += P.wellStiffness * wellScale_ * d / (glm::dot(d, d) + 0.25f);
+            }
         }
 
         accel_[i] = clampLength(a, P.maxAccel);

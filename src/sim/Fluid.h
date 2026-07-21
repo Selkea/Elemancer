@@ -23,7 +23,9 @@ struct FluidParams {
     float mass        = 0.0f;     // 0 => derived from the initial packing
     float drag        = 0.35f;    // linear velocity damping, per second
     float restitution = 0.30f;    // wall bounce
-    float maxSpeed    = 12.0f;    // clamps keep a stiff solver from exploding
+    // Must stay above any cursor speed we expect to track, or this clamp
+    // becomes the thing that causes breakup instead of the well cap.
+    float maxSpeed    = 30.0f;
     float maxAccel    = 3000.0f;
 
     // Half-extents of the domain, per axis. Driven by the window so the liquid
@@ -55,15 +57,49 @@ struct FluidParams {
     float antiClump = 600.0f;
     float antiClumpRadius = 0.5f;  // as a fraction of h; rest spacing is 0.6h
 
-    // Cursor gravity well, with Plummer softening. The softening length must
-    // be on the order of the body radius: any smaller and the well becomes a
-    // singularity buried inside the liquid that slingshots particles out
-    // through the far side.
-    // Inverse-square falls off hard across a window-sized domain: a droplet
-    // 2.5 units out feels only ~1.2 u/s^2 at G=8, so strays take far too long
-    // to come home. Hence the stronger default.
-    float attractG    = 12.0f;
-    float attractSoft = 0.30f;
+    // Cursor well: a saturating spring, not an inverse-square attractor.
+    //
+    // Inverse-square is backwards for cursor-following. Its pull weakens with
+    // distance, so a particle that falls behind can never catch up and the
+    // body shears apart at any speed. A spring pulls stragglers proportionally
+    // harder, so the liquid tracks the cursor as a single body.
+    //
+    // But a pure spring is a converging field: it only ever compacts the body,
+    // so on its own it never breaks apart, at any speed. Clamping the
+    // magnitude does not help either -- that makes the force uniform across
+    // the body, and a uniform body force (gravity on a falling drop) tears
+    // nothing.
+    //
+    // So the pull holds like a spring within wellHoldRadius and decays as 1/r
+    // beyond it. Ordinary cursor speeds keep the whole body inside that
+    // radius and it tracks as one. Move fast enough that the tail lags past
+    // it and the tail is pulled progressively less, falls further behind, and
+    // detaches. The hold radius is therefore the speed threshold: the body
+    // lags roughly wellDamping/wellStiffness * cursorSpeed.
+    // Split into two terms, because following and sloshing otherwise fight
+    // over one constant. A per-particle spring strong enough to track the
+    // cursor is also a strong confining field: it squeezes the liquid into a
+    // rigid ball that never deforms.
+    //
+    // wellStiffness acts on the centroid and is applied uniformly to every
+    // particle, so it translates the body without squeezing it and the shape
+    // stays free to slosh. wellLocal is the much weaker per-particle pull that
+    // gathers strays, and it is the one carrying the hold-radius falloff, so
+    // it is what decides when the tail tears away.
+    // The local term has to carry most of the pull. Bulk force is uniform, so
+    // it produces no differential across the body: too much of it and the
+    // liquid translates as a rigid ball that never deforms, for the same
+    // reason a drop falling under gravity does not deform. Bulk is here only
+    // to guarantee the body keeps up; local is what makes it slosh and tear.
+    float wellStiffness = 22.0f;   // bulk, on the centroid
+    float wellLocal = 34.0f;       // per-particle
+    float wellHoldRadius = 1.1f;
+    float wellMaxAccel = 400.0f;   // safety clamp only; should not shape behaviour
+
+    // Damps the body's bulk drift so it settles onto the cursor instead of
+    // orbiting it. Uses the mean velocity rather than each particle's own, so
+    // it never damps internal motion and the slosh survives.
+    float wellDamping   = 8.0f;
 };
 
 // Muller-2003 SPH with a uniform grid for neighbour lookup. Deliberately free
@@ -78,6 +114,9 @@ public:
 
     void setAttractor(const glm::vec3& p, bool enabled);
     const glm::vec3& attractor() const { return attractor_; }
+
+    // Scales the well. Negative repels.
+    void setWellScale(float s) { wellScale_ = s; }
 
     std::size_t size() const { return pos_.size(); }
     const std::vector<glm::vec3>& positions() const { return pos_; }
@@ -106,6 +145,7 @@ private:
 
     glm::vec3 attractor_{0.0f};
     bool attractOn_ = false;
+    float wellScale_ = 1.0f;
 };
 
 }  // namespace elem

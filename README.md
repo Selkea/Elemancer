@@ -23,7 +23,15 @@ cmake --build build
 
 # Override tunables to reproduce a tuning pathology headlessly, and time it
 ./build/elemancer --shot out.bmp --frames 150 --tension 3 --well 80
+
+# Whip the well back and forth at a peak speed, in world units/s, and report
+# the worst stretch reached. Prints WHIP peakMeanRadius / peakStrays.
+./build/elemancer --shot out.bmp --sweepspeed 8
 ```
+
+Rest-packed `meanRadius` is 0.216, so a whip that leaves it at 0.216 with 0%
+strays did not deform the body at all. As of now it stays intact through a
+peak cursor speed of 5, begins to shed at 6, and tears properly at 8.
 
 | Input | Effect |
 | --- | --- |
@@ -32,6 +40,7 @@ cmake --build build
 | RMB | Repel |
 | `[` `]` | Surface tension — how tightly droplets hold together |
 | `-` `=` | Well strength |
+| `9` `0` | Hold radius — the cursor speed at which the liquid starts to tear |
 | `,` `.` | Viscosity |
 | `;` `'` | Drag |
 | `G` | Toggle world gravity |
