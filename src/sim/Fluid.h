@@ -14,10 +14,19 @@ struct FluidParams {
     float h           = 0.14f;    // smoothing radius
     float restDensity = 1000.0f;
     float stiffness   = 180.0f;   // pressure gas constant
-    float viscosity   = 9.0f;
+    float viscosity   = 5.0f;
     float mass        = 0.0f;     // 0 => derived from the initial packing
     float drag        = 0.35f;    // linear velocity damping, per second
-    float boundHalf   = 1.0f;     // half-extent of the cubic domain
+    float boundHalf   = 1.2f;     // half-extent of the cubic domain
+
+    // Akinci-style cohesion. This is what makes the body behave like a liquid
+    // rather than a cloud: it rounds the surface, lets it neck and pinch, and
+    // pulls stray droplets back in.
+    //
+    // It has to be strong. Pressure is clamped non-negative, so an expanded
+    // body has no restoring force of its own, and cohesion falls off with
+    // distance -- too little and expansion runs away into a diffuse cloud.
+    float surfaceTension = 400.0f;
     float restitution = 0.30f;    // wall bounce
     float maxSpeed    = 12.0f;    // clamps keep a stiff solver from exploding
     float maxAccel    = 3000.0f;
@@ -25,8 +34,14 @@ struct FluidParams {
     glm::vec3 gravity = glm::vec3(0.0f);  // world gravity, off by default
 
     // Cursor gravity well: a softened inverse-square pull toward the attractor.
-    float attractG    = 3.0f;
-    float attractSoft = 0.05f;    // softening length, avoids a singularity at r=0
+    //
+    // Plummer softening, and the length matters enormously. It must be on the
+    // order of the body's own radius: any smaller and the well becomes a
+    // singularity buried inside the liquid that slingshots particles straight
+    // out through the far side. At this length the well is harmonic within the
+    // body and only falls off as inverse-square outside it.
+    float attractG    = 8.0f;
+    float attractSoft = 0.45f;
 };
 
 // Muller-2003 SPH with a uniform grid for neighbour lookup. Deliberately free

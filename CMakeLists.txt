@@ -19,7 +19,7 @@ add_library(elemancer_sim STATIC src/sim/Fluid.cpp)
 target_include_directories(elemancer_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(elemancer_sim PUBLIC glm::glm)
 
-add_executable(elemancer src/main.cpp)
+add_executable(elemancer src/main.cpp src/render/FluidRenderer.cpp)
 target_link_libraries(elemancer PRIVATE elemancer_sim OpenGL::GL glfw GLEW::GLEW)
 target_compile_definitions(elemancer PRIVATE
   ELEMANCER_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

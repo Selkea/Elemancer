@@ -21,6 +21,20 @@ bool finite(const glm::vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
+// Akinci et al. cohesion spline. It peaks at r = h/2 and returns to zero at
+// both ends, so neighbours pull together without piling onto one another the
+// way a plain attractive force would.
+float cohesionSpline(float r, float h, float coef) {
+    if (r <= 0.0f || r >= h) return 0.0f;
+
+    const float hr = h - r;
+    const float term = hr * hr * hr * r * r * r;
+    if (2.0f * r > h) return coef * term;
+
+    const float h3 = h * h * h;
+    return coef * (2.0f * term - (h3 * h3) / 64.0f);
+}
+
 }  // namespace
 
 void Fluid::init(int count, std::uint32_t seed) {
@@ -102,6 +116,7 @@ void Fluid::step(float dt) {
     const float poly6Coef = 315.0f / (64.0f * kPi * std::pow(h, 9.0f));
     const float spikyCoef = -45.0f / (kPi * std::pow(h, 6.0f));
     const float viscCoef = 45.0f / (kPi * std::pow(h, 6.0f));
+    const float cohesionCoef = 32.0f / (kPi * std::pow(h, 9.0f));
 
     buildGrid();
 
@@ -154,6 +169,7 @@ void Fluid::step(float dt) {
 
         glm::vec3 fPress(0.0f);
         glm::vec3 fVisc(0.0f);
+        glm::vec3 fCohesion(0.0f);
 
         for (int dz = -1; dz <= 1; ++dz) {
             const int cz = bz + dz;
@@ -179,6 +195,10 @@ void Fluid::step(float dt) {
                             // negative, so the net pressure term is repulsive.
                             const float gradMag = spikyCoef * (h - r) * (h - r);
                             fPress += -m * (pri + pressure_[j]) / (2.0f * rhoj) * gradMag * (d / r);
+
+                            // Cohesion pulls the other way, toward j.
+                            const float cohesion = cohesionSpline(r, h, cohesionCoef);
+                            fCohesion += -P.surfaceTension * m * m * cohesion * (d / r);
                         }
                         fVisc += P.viscosity * m * (vel_[j] - vi) / rhoj * (viscCoef * (h - r));
                     }
@@ -186,7 +206,7 @@ void Fluid::step(float dt) {
             }
         }
 
-        glm::vec3 a = (fPress + fVisc) / density_[i] + P.gravity;
+        glm::vec3 a = (fPress + fVisc + fCohesion) / density_[i] + P.gravity;
 
         if (attractOn_) {
             const glm::vec3 d = attractor_ - pi;

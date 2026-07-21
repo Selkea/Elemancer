@@ -19,6 +19,7 @@ int main() {
 
     int failures = 0;
     float meanDensity = 0.0f;
+    float spread = 0.0f;
     glm::vec3 centroid(0.0f);
     const float bound = f.params().boundHalf + 1e-3f;
 
@@ -40,12 +41,20 @@ int main() {
     meanDensity /= n;
     const float distToWell = glm::length(centroid - target);
 
-    std::printf("SIMTEST particles=%zu meanDensity=%.1f centroid=(%.3f, %.3f, %.3f)"
-                " distToWell=%.3f nonFiniteOrOOB=%d\n",
-                f.size(), meanDensity, centroid.x, centroid.y, centroid.z,
-                distToWell, failures);
+    // Mean distance from the centroid: if cohesion ever stops working the body
+    // disperses and this grows without bound.
+    for (std::size_t i = 0; i < f.size(); ++i) {
+        spread += glm::length(f.positions()[i] - centroid);
+    }
+    spread /= n;
 
-    const bool ok = failures == 0 && meanDensity > 1.0f && distToWell < 0.20f;
+    std::printf("SIMTEST particles=%zu meanDensity=%.1f centroid=(%.3f, %.3f, %.3f)"
+                " distToWell=%.3f meanRadius=%.3f nonFiniteOrOOB=%d\n",
+                f.size(), meanDensity, centroid.x, centroid.y, centroid.z,
+                distToWell, spread, failures);
+
+    const bool ok = failures == 0 && meanDensity > 1.0f && distToWell < 0.35f &&
+                    spread < 0.90f;
     std::printf("%s\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

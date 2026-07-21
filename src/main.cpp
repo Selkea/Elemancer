@@ -1,9 +1,5 @@
 // Elemancer - a cohesive liquid that gathers around a cursor gravity well.
 //
-// Milestone 1: SPH solver on the CPU, drawn as lit sphere impostors. The
-// screen-space surface pass that fuses the impostors into a single glossy
-// body comes next; impostors are already enough to read the motion.
-//
 //   elemancer                       interactive
 //   elemancer --shot out.bmp        headless capture, for self-verification
 
@@ -13,17 +9,16 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
+#include "render/FluidRenderer.h"
 #include "sim/Fluid.h"
 
 namespace {
@@ -32,54 +27,6 @@ constexpr int kWidth = 1280;
 constexpr int kHeight = 800;
 constexpr int kSubSteps = 2;
 constexpr float kDt = 1.0f / 240.0f;
-
-std::string readFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        std::fprintf(stderr, "[elemancer] cannot open %s\n", path.c_str());
-        return {};
-    }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-GLuint compileShader(GLenum type, const std::string& src, const char* label) {
-    const GLuint s = glCreateShader(type);
-    const char* p = src.c_str();
-    glShaderSource(s, 1, &p, nullptr);
-    glCompileShader(s);
-
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[4096];
-        glGetShaderInfoLog(s, sizeof log, nullptr, log);
-        std::fprintf(stderr, "[elemancer] %s shader failed:\n%s\n", label, log);
-    }
-    return s;
-}
-
-GLuint linkProgram(const std::string& vsSrc, const std::string& fsSrc) {
-    const GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc, "vertex");
-    const GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc, "fragment");
-
-    const GLuint prog = glCreateProgram();
-    glAttachShader(prog, vs);
-    glAttachShader(prog, fs);
-    glLinkProgram(prog);
-
-    GLint ok = 0;
-    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[4096];
-        glGetProgramInfoLog(prog, sizeof log, nullptr, log);
-        std::fprintf(stderr, "[elemancer] link failed:\n%s\n", log);
-    }
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    return prog;
-}
 
 // 24-bit BMP. glReadPixels hands back bottom-up rows and BMP stores bottom-up,
 // so the rows go out in the order they arrive.
@@ -150,13 +97,18 @@ glm::vec3 cursorOnPlane(GLFWwindow* win, const glm::mat4& view, const glm::mat4&
     return o + d * (-o.z / d.z);
 }
 
+glm::mat4 makeProj(int fbw, int fbh) {
+    return glm::perspective(glm::radians(45.0f),
+                            static_cast<float>(fbw) / static_cast<float>(fbh), 0.05f, 100.0f);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     bool shotMode = false;
     std::string shotPath = "elemancer_shot.bmp";
     int particleCount = 2600;
-    int shotFrames = 420;
+    int shotFrames = 700;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -178,7 +130,6 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_SAMPLES, 4);
     if (shotMode) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* win = glfwCreateWindow(kWidth, kHeight, "Elemancer", nullptr, nullptr);
@@ -201,77 +152,48 @@ int main(int argc, char** argv) {
                 reinterpret_cast<const char*>(glGetString(GL_VERSION)),
                 reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
 
-    const std::string assetDir = ELEMANCER_ASSET_DIR;
-    const GLuint prog = linkProgram(readFile(assetDir + "/shaders/particle.vert"),
-                                    readFile(assetDir + "/shaders/particle.frag"));
-
-    const GLint uView = glGetUniformLocation(prog, "uView");
-    const GLint uProj = glGetUniformLocation(prog, "uProj");
-    const GLint uPointScale = glGetUniformLocation(prog, "uPointScale");
-    const GLint uRadius = glGetUniformLocation(prog, "uRadius");
-    const GLint uLightDir = glGetUniformLocation(prog, "uLightDir");
-    const GLint uBaseColor = glGetUniformLocation(prog, "uBaseColor");
+    elem::FluidRenderer renderer;
+    if (!renderer.init(ELEMANCER_ASSET_DIR)) {
+        std::fprintf(stderr, "[elemancer] renderer init failed\n");
+        return 1;
+    }
 
     elem::Fluid fluid;
     fluid.init(particleCount);
     std::printf("[elemancer] particles=%zu\n", fluid.size());
 
-    GLuint vao = 0, vbo = 0;
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(fluid.size() * sizeof(glm::vec3)),
-                 nullptr, GL_STREAM_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
-
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_PROGRAM_POINT_SIZE);
-    glEnable(GL_MULTISAMPLE);
-
-    const float visualRadius = 0.055f;
     const glm::vec3 eye(0.0f, 0.0f, 3.0f);
-
-    const auto drawScene = [&](int fbw, int fbh) {
-        const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        const glm::mat4 proj = glm::perspective(
-            glm::radians(45.0f), static_cast<float>(fbw) / static_cast<float>(fbh), 0.05f, 100.0f);
-
-        glViewport(0, 0, fbw, fbh);
-        glClearColor(0.03f, 0.04f, 0.06f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        static_cast<GLsizeiptr>(fluid.size() * sizeof(glm::vec3)),
-                        fluid.positions().data());
-
-        glUseProgram(prog);
-        glUniformMatrix4fv(uView, 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(uProj, 1, GL_FALSE, glm::value_ptr(proj));
-        glUniform1f(uPointScale, static_cast<float>(fbh) * proj[1][1]);
-        glUniform1f(uRadius, visualRadius);
-        glUniform3f(uLightDir, 0.4f, 0.7f, 0.6f);
-        glUniform3f(uBaseColor, 0.16f, 0.42f, 0.72f);
-
-        glBindVertexArray(vao);
-        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(fluid.size()));
-
-        return proj;
-    };
+    const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
     if (shotMode) {
-        // Let the blob gather around a fixed well, then grab one frame.
-        fluid.setAttractor(glm::vec3(0.30f, 0.15f, 0.0f), true);
-        for (int i = 0; i < shotFrames; ++i) {
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(win, &fbw, &fbh);
+
+        // Settle, sweep the well in an arc, then snap it back to the centre and
+        // capture while the body is still rushing in. A settled blob only
+        // proves it is round; one caught mid-motion proves it is liquid,
+        // because it lags, stretches and recoils.
+        const int settle = shotFrames * 45 / 100;
+        const int sweep = shotFrames * 40 / 100;
+        const int recover = shotFrames - settle - sweep;
+
+        fluid.setAttractor(glm::vec3(0.0f), true);
+        for (int i = 0; i < settle; ++i) {
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+        }
+        for (int i = 0; i < sweep; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(sweep);
+            const float angle = t * 6.2831853f * 0.9f;
+            fluid.setAttractor(glm::vec3(0.45f * std::cos(angle), 0.45f * std::sin(angle), 0.0f),
+                               true);
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+        }
+        fluid.setAttractor(glm::vec3(0.0f), true);
+        for (int i = 0; i < recover; ++i) {
             for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
         }
 
-        int fbw = 0, fbh = 0;
-        glfwGetFramebufferSize(win, &fbw, &fbh);
-        drawScene(fbw, fbh);
+        renderer.render(fluid.positions(), view, makeProj(fbw, fbh), fbw, fbh);
         glFinish();
 
         std::vector<unsigned char> pixels(static_cast<std::size_t>(fbw) * fbh * 3);
@@ -279,7 +201,6 @@ int main(int argc, char** argv) {
         glReadBuffer(GL_BACK);
         glReadPixels(0, 0, fbw, fbh, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
 
-        // Centroid + spread give a numeric read on the shot alongside the image.
         glm::vec3 centroid(0.0f);
         for (const glm::vec3& p : fluid.positions()) centroid += p;
         centroid /= static_cast<float>(fluid.size());
@@ -288,16 +209,19 @@ int main(int argc, char** argv) {
         spread /= static_cast<float>(fluid.size());
 
         const bool ok = saveBMP(shotPath, fbw, fbh, pixels);
-        std::printf("SHOT file=%s %dx%d centroid=(%.3f, %.3f, %.3f) meanRadius=%.3f saved=%d\n",
+        std::printf("SHOT file=%s %dx%d centroid=(%.3f, %.3f, %.3f) meanRadius=%.3f"
+                    " wellLag=%.3f saved=%d\n",
                     shotPath.c_str(), fbw, fbh, centroid.x, centroid.y, centroid.z, spread,
-                    ok ? 1 : 0);
+                    glm::length(centroid - fluid.attractor()), ok ? 1 : 0);
 
+        renderer.shutdown();
         glfwDestroyWindow(win);
         glfwTerminate();
         return ok ? 0 : 1;
     }
 
     std::printf("[elemancer] LMB pull harder | RMB repel | G gravity | R reset | ESC quit\n");
+    glfwSwapInterval(1);
 
     const float baseG = fluid.params().attractG;
     auto last = std::chrono::high_resolution_clock::now();
@@ -318,9 +242,7 @@ int main(int argc, char** argv) {
         glfwGetFramebufferSize(win, &fbw, &fbh);
         if (fbw == 0 || fbh == 0) continue;
 
-        const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        const glm::mat4 proj = glm::perspective(
-            glm::radians(45.0f), static_cast<float>(fbw) / static_cast<float>(fbh), 0.05f, 100.0f);
+        const glm::mat4 proj = makeProj(fbw, fbh);
 
         fluid.setAttractor(cursorOnPlane(win, view, proj), true);
         fluid.params().attractG =
@@ -330,7 +252,7 @@ int main(int argc, char** argv) {
 
         for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
 
-        drawScene(fbw, fbh);
+        renderer.render(fluid.positions(), view, proj, fbw, fbh);
         glfwSwapBuffers(win);
 
         const auto now = std::chrono::high_resolution_clock::now();
@@ -343,6 +265,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    renderer.shutdown();
     glfwDestroyWindow(win);
     glfwTerminate();
     return 0;

@@ -1,11 +1,13 @@
 #version 430 core
 
+// Shared by the depth and thickness passes: one point sprite per particle,
+// sized so it covers exactly the sphere's projected diameter.
 layout(location = 0) in vec3 aPos;
 
 uniform mat4 uView;
 uniform mat4 uProj;
 uniform float uPointScale;  // framebufferHeight * proj[1][1]
-uniform float uRadius;      // particle radius, world units
+uniform float uRadius;
 
 out vec3 vViewPos;
 

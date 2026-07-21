@@ -1,0 +1,99 @@
+#version 430 core
+
+// Shade the smoothed depth buffer as a liquid surface: reconstruct position
+// and normal from depth, then blend refraction against reflection by Fresnel
+// and absorb light through the accumulated thickness.
+in vec2 vUV;
+
+uniform sampler2D uDepth;      // bilaterally smoothed view-space distance
+uniform sampler2D uThickness;
+uniform sampler2D uScene;      // environment already rendered behind the fluid
+
+uniform mat4 uInvProj;
+uniform mat4 uInvView;
+uniform vec2 uTexel;
+uniform vec3 uLightDirView;
+uniform vec3 uLiquidColor;
+uniform float uRefractScale;
+uniform float uAbsorption;
+
+layout(location = 0) out vec4 outColor;
+
+const float kBackground = 1.0e6;
+
+vec3 viewPosFromDepth(vec2 uv, float dist) {
+    vec4 clip = vec4(uv * 2.0 - 1.0, -1.0, 1.0);
+    vec4 v = uInvProj * clip;
+    vec3 dir = normalize(v.xyz / v.w);
+    return dir * (dist / max(-dir.z, 1e-5));
+}
+
+void main() {
+    float dist = texture(uDepth, vUV).r;
+    vec3 background = texture(uScene, vUV).rgb;
+
+    if (dist >= kBackground * 0.5) {
+        outColor = vec4(background, 1.0);
+        return;
+    }
+
+    vec3 P = viewPosFromDepth(vUV, dist);
+
+    // One-sided differences, keeping whichever neighbour is nearer in depth.
+    // A neighbour that landed on the background must be rejected outright:
+    // differencing against 1e6 produces a garbage normal, which is what shows
+    // up as black speckle along the silhouette.
+    float dR = texture(uDepth, vUV + vec2(uTexel.x, 0.0)).r;
+    float dL = texture(uDepth, vUV - vec2(uTexel.x, 0.0)).r;
+    float dU = texture(uDepth, vUV + vec2(0.0, uTexel.y)).r;
+    float dD = texture(uDepth, vUV - vec2(0.0, uTexel.y)).r;
+
+    bool okR = dR < kBackground * 0.5;
+    bool okL = dL < kBackground * 0.5;
+    bool okU = dU < kBackground * 0.5;
+    bool okD = dD < kBackground * 0.5;
+
+    vec3 right = viewPosFromDepth(vUV + vec2(uTexel.x, 0.0), dR) - P;
+    vec3 left = P - viewPosFromDepth(vUV - vec2(uTexel.x, 0.0), dL);
+    vec3 ddx = vec3(uTexel.x, 0.0, 0.0);
+    if (okR && okL) ddx = abs(left.z) < abs(right.z) ? left : right;
+    else if (okR) ddx = right;
+    else if (okL) ddx = left;
+
+    vec3 up = viewPosFromDepth(vUV + vec2(0.0, uTexel.y), dU) - P;
+    vec3 down = P - viewPosFromDepth(vUV - vec2(0.0, uTexel.y), dD);
+    vec3 ddy = vec3(0.0, uTexel.y, 0.0);
+    if (okU && okD) ddy = abs(down.z) < abs(up.z) ? down : up;
+    else if (okU) ddy = up;
+    else if (okD) ddy = down;
+
+    vec3 N = normalize(cross(ddx, ddy));
+    if (N.z < 0.0) N = -N;
+
+    float thickness = texture(uThickness, vUV).r;
+    vec3 V = normalize(-P);
+
+    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+
+    // Refraction: nudge the background lookup along the surface normal.
+    vec2 refractUV = clamp(vUV + N.xy * uRefractScale * min(thickness, 1.5),
+                           vec2(0.001), vec2(0.999));
+    vec3 refracted = texture(uScene, refractUV).rgb;
+    refracted *= exp(-(vec3(1.0) - uLiquidColor) * thickness * uAbsorption);
+
+    vec3 Nworld = normalize((uInvView * vec4(N, 0.0)).xyz);
+    vec3 Vworld = normalize((uInvView * vec4(V, 0.0)).xyz);
+    vec3 reflected = envColor(reflect(-Vworld, Nworld));
+
+    vec3 color = mix(refracted, reflected, fresnel);
+
+    // Light scattered back out of the body. Without it, thick regions absorb
+    // everything and go black instead of glowing with the liquid's own colour.
+    color += uLiquidColor * (1.0 - exp(-thickness * 1.2)) * 0.30;
+
+    vec3 L = normalize(uLightDirView);
+    vec3 H = normalize(L + V);
+    color += vec3(1.0, 0.97, 0.92) * pow(max(dot(N, H), 0.0), 180.0) * 0.7;
+
+    outColor = vec4(color, 1.0);
+}
