@@ -140,6 +140,14 @@ bool FluidRenderer::init(const std::string& assetDir) {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
     glBindVertexArray(0);
 
+    glGenVertexArrays(1, &vaoSpray_);
+    glGenBuffers(1, &vboSpray_);
+    glBindVertexArray(vaoSpray_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboSpray_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4), nullptr);
+    glBindVertexArray(0);
+
     glEnable(GL_PROGRAM_POINT_SIZE);
     return true;
 }
@@ -159,8 +167,11 @@ bool FluidRenderer::buildPrograms() {
     progComposite_ = linkProgram(
         fullscreenVs, spliceCommon(readFile(assetDir_ + "/shaders/composite.frag"), common),
         "composite");
+    progSpray_ = linkProgram(readFile(assetDir_ + "/shaders/spray.vert"),
+                             readFile(assetDir_ + "/shaders/spray.frag"), "spray");
 
-    return progBackground_ && progDepth_ && progThickness_ && progBlur_ && progComposite_;
+    return progBackground_ && progDepth_ && progThickness_ && progBlur_ && progComposite_ &&
+           progSpray_;
 }
 
 void FluidRenderer::releaseTargets() {
@@ -209,7 +220,9 @@ void FluidRenderer::drawQuad() const {
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
-void FluidRenderer::render(const std::vector<glm::vec3>& positions, const glm::mat4& view,
+void FluidRenderer::render(const std::vector<glm::vec3>& positions,
+                           const std::vector<glm::vec3>& sprayPositions,
+                           const std::vector<float>& sprayLife, const glm::mat4& view,
                            const glm::mat4& proj, int fbWidth, int fbHeight) {
     if (fbWidth <= 0 || fbHeight <= 0) return;
     ensureTargets(fbWidth, fbHeight);
@@ -319,6 +332,43 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions, const glm::m
     setFloat(progComposite_, "uAbsorption", settings_.absorption);
     drawQuad();
 
+    // 6. Diffuse spray, additively over the shaded surface. Deliberately not
+    // depth tested: the droplets are sub-pixel scale and reading them as a
+    // haze over the body looks better than popping them against its silhouette.
+    if (!sprayPositions.empty() && progSpray_ != 0) {
+        sprayScratch_.resize(sprayPositions.size());
+        for (std::size_t i = 0; i < sprayPositions.size(); ++i) {
+            const float life = i < sprayLife.size() ? sprayLife[i] : 0.0f;
+            sprayScratch_[i] = glm::vec4(sprayPositions[i], life);
+        }
+
+        const GLsizeiptr sprayBytes =
+            static_cast<GLsizeiptr>(sprayScratch_.size() * sizeof(glm::vec4));
+        glBindBuffer(GL_ARRAY_BUFFER, vboSpray_);
+        if (sprayBytes > sprayCapacity_) {
+            glBufferData(GL_ARRAY_BUFFER, sprayBytes, nullptr, GL_STREAM_DRAW);
+            sprayCapacity_ = sprayBytes;
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sprayBytes, sprayScratch_.data());
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);  // premultiplied in the shader
+        glDisable(GL_DEPTH_TEST);
+
+        glUseProgram(progSpray_);
+        setMat4(progSpray_, "uView", view);
+        setMat4(progSpray_, "uProj", proj);
+        setFloat(progSpray_, "uPointScale", pointScale);
+        setFloat(progSpray_, "uRadius", settings_.sprayRadius);
+        setFloat(progSpray_, "uLifeMax", settings_.sprayLifeMax);
+        setFloat(progSpray_, "uIntensity", settings_.sprayIntensity);
+        setVec3(progSpray_, "uColor", settings_.sprayColor);
+
+        glBindVertexArray(vaoSpray_);
+        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(sprayScratch_.size()));
+        glDisable(GL_BLEND);
+    }
+
     glActiveTexture(GL_TEXTURE0);
 }
 
@@ -326,10 +376,12 @@ void FluidRenderer::shutdown() {
     releaseTargets();
     if (vboParticles_) glDeleteBuffers(1, &vboParticles_);
     if (vaoParticles_) glDeleteVertexArrays(1, &vaoParticles_);
+    if (vboSpray_) glDeleteBuffers(1, &vboSpray_);
+    if (vaoSpray_) glDeleteVertexArrays(1, &vaoSpray_);
     if (vaoQuad_) glDeleteVertexArrays(1, &vaoQuad_);
 
     const GLuint progs[] = {progBackground_, progDepth_, progThickness_, progBlur_,
-                            progComposite_};
+                            progComposite_, progSpray_};
     for (GLuint p : progs) {
         if (p) glDeleteProgram(p);
     }

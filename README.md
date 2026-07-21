@@ -70,6 +70,20 @@ workspace needs the same files at that parent's root.
 
 ## Layout
 
+## Techniques and references
+
+- **Screen-space fluid surface** — Green (NVIDIA), "Screen Space Fluid Rendering".
+- **Spray** — Ihmsen et al. 2012, "Unified Spray, Foam and Bubbles for
+  Particle-Based Fluids". Diffuse particles are a post-process over the SPH
+  state with no forces between them, generated from a trapped-air potential
+  (relative-velocity based) gated by kinetic energy. Only spray is modelled;
+  foam and bubbles need a gravity direction this scene does not have.
+- **Refraction / Fresnel** — de Greve 2006, "Reflections and Refractions in
+  Ray Tracing": Snell's law in vector form for the background bend, Schlick
+  reflectance with R0 = 0.02 for the air/water interface.
+
+## Layout
+
 - `src/sim/` — SPH solver. No graphics dependency, so it runs headless in tests.
 - `src/main.cpp` — window, input, and the particle draw pass.
 - `shaders/` — loaded from disk at runtime; edit and rerun without recompiling.

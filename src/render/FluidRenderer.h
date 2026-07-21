@@ -36,12 +36,20 @@ public:
         float absorption = 0.90f;
         glm::vec3 liquidColor{0.42f, 0.70f, 0.92f};
         glm::vec3 lightDirWorld{0.45f, 0.75f, 0.50f};
+
+        // Diffuse spray, drawn additively over the surface.
+        float sprayRadius = 0.011f;
+        float sprayIntensity = 0.55f;
+        float sprayLifeMax = 1.20f;  // must match DiffuseParams::lifeMax
+        glm::vec3 sprayColor{0.86f, 0.94f, 1.0f};
     };
 
     bool init(const std::string& assetDir);
     void shutdown();
 
-    void render(const std::vector<glm::vec3>& positions, const glm::mat4& view,
+    void render(const std::vector<glm::vec3>& positions,
+                const std::vector<glm::vec3>& sprayPositions,
+                const std::vector<float>& sprayLife, const glm::mat4& view,
                 const glm::mat4& proj, int fbWidth, int fbHeight);
 
     Settings& settings() { return settings_; }
@@ -61,6 +69,7 @@ private:
     GLuint progThickness_ = 0;
     GLuint progBlur_ = 0;
     GLuint progComposite_ = 0;
+    GLuint progSpray_ = 0;
 
     GLuint fboScene_ = 0, fboDepth_ = 0, fboThickness_ = 0;
     GLuint fboBlur_[2] = {0, 0};
@@ -69,7 +78,10 @@ private:
     GLuint rboDepth_ = 0;
 
     GLuint vaoParticles_ = 0, vboParticles_ = 0, vaoQuad_ = 0;
+    GLuint vaoSpray_ = 0, vboSpray_ = 0;
     GLsizeiptr vboCapacity_ = 0;
+    GLsizeiptr sprayCapacity_ = 0;
+    std::vector<glm::vec4> sprayScratch_;  // xyz position, w life
 
     int width_ = 0, height_ = 0;
 };

@@ -21,6 +21,13 @@ bool finite(const glm::vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
+// Ihmsen's mapping function (eq. 1): clamps a quantity into [0,1] between a
+// lower and upper threshold.
+float phi(float x, float lo, float hi) {
+    if (hi <= lo) return 0.0f;
+    return (std::min(x, hi) - std::min(x, lo)) / (hi - lo);
+}
+
 // Akinci et al. cohesion spline. It peaks at r = h/2 and returns to zero at
 // both ends, so neighbours pull together without piling onto one another the
 // way a plain attractive force would.
@@ -70,7 +77,12 @@ void Fluid::init(int count, std::uint32_t seed) {
     accel_.assign(n, glm::vec3(0.0f));
     density_.assign(n, 0.0f);
     pressure_.assign(n, 0.0f);
+    trappedAir_.assign(n, 0.0f);
     nextInCell_.assign(n, -1);
+
+    sprayPos_.clear();
+    sprayVel_.clear();
+    sprayLife_.clear();
 
     rebuildGrid();
 }
@@ -107,6 +119,56 @@ int Fluid::cellIndex(const glm::vec3& p) const {
     const int cy = std::min(std::max(static_cast<int>(std::floor(rel.y)), 0), gridDim_.y - 1);
     const int cz = std::min(std::max(static_cast<int>(std::floor(rel.z)), 0), gridDim_.z - 1);
     return (cz * gridDim_.y + cy) * gridDim_.x + cx;
+}
+
+int Fluid::countNeighbours(const glm::vec3& p) const {
+    const float h2 = params_.h * params_.h;
+    const glm::vec3 rel = (p - gridMin_) / cellSize_;
+    const int bx = std::min(std::max(static_cast<int>(std::floor(rel.x)), 0), gridDim_.x - 1);
+    const int by = std::min(std::max(static_cast<int>(std::floor(rel.y)), 0), gridDim_.y - 1);
+    const int bz = std::min(std::max(static_cast<int>(std::floor(rel.z)), 0), gridDim_.z - 1);
+
+    int count = 0;
+    for (int dz = -1; dz <= 1; ++dz) {
+        const int cz = bz + dz;
+        if (cz < 0 || cz >= gridDim_.z) continue;
+        for (int dy = -1; dy <= 1; ++dy) {
+            const int cy = by + dy;
+            if (cy < 0 || cy >= gridDim_.y) continue;
+            for (int dx = -1; dx <= 1; ++dx) {
+                const int cx = bx + dx;
+                if (cx < 0 || cx >= gridDim_.x) continue;
+                const int cell = (cz * gridDim_.y + cy) * gridDim_.x + cx;
+                for (int j = cellHead_[cell]; j != -1; j = nextInCell_[j]) {
+                    if (glm::dot(p - pos_[j], p - pos_[j]) < h2) ++count;
+                }
+            }
+        }
+    }
+    return count;
+}
+
+glm::vec3 Fluid::wellAccel(const glm::vec3& p, const glm::vec3& velBulk,
+                           const glm::vec3& posBulk) const {
+    if (!attractOn_) return glm::vec3(0.0f);
+
+    const FluidParams& P = params_;
+    const glm::vec3 d = attractor_ - p;
+
+    if (wellScale_ < 0.0f) {
+        return P.wellStiffness * wellScale_ * d / (glm::dot(d, d) + 0.25f);
+    }
+
+    const glm::vec3 aBulk =
+        P.wellStiffness * wellScale_ * (attractor_ - posBulk) - P.wellDamping * velBulk;
+
+    float local = P.wellLocal * wellScale_;
+    const float r = glm::length(d);
+    if (r > P.wellHoldRadius) {
+        const float f = P.wellHoldRadius / r;
+        local *= f * f;
+    }
+    return clampLength(aBulk + local * d, P.wellMaxAccel);
 }
 
 void Fluid::buildGrid() {
@@ -199,6 +261,7 @@ void Fluid::step(float dt) {
         glm::vec3 fPress(0.0f);
         glm::vec3 fVisc(0.0f);
         glm::vec3 aCohesion(0.0f);
+        float vdif = 0.0f;
 
         for (int dz = -1; dz <= 1; ++dz) {
             const int cz = bz + dz;
@@ -235,6 +298,18 @@ void Fluid::step(float dt) {
                                 const float push = std::min(rMin / r - 1.0f, 8.0f);
                                 aCohesion += P.antiClump * push * (d / r);
                             }
+
+                            // Trapped-air potential (Ihmsen 2012, eq. 2). Built
+                            // from relative velocity rather than curl, because
+                            // curl misses head-on impacts and those are exactly
+                            // where air gets dragged in. The bracket is 0 for
+                            // particles separating, 2 for particles closing.
+                            const glm::vec3 vij = vi - vel_[j];
+                            const float vlen = glm::length(vij);
+                            if (vlen > 1e-6f) {
+                                vdif += vlen * (1.0f - glm::dot(vij / vlen, d / r)) *
+                                        (1.0f - r / h);
+                            }
                         }
                         fVisc += P.viscosity * m * (vel_[j] - vi) / rhoj * (viscCoef * (h - r));
                     }
@@ -244,32 +319,8 @@ void Fluid::step(float dt) {
 
         glm::vec3 a = (fPress + fVisc) / density_[i] + aCohesion + P.gravity;
 
-        if (attractOn_) {
-            const glm::vec3 d = attractor_ - pi;
-            if (wellScale_ >= 0.0f) {
-                // Uniform on the whole body: translates without squeezing.
-                const glm::vec3 aBulk =
-                    P.wellStiffness * wellScale_ * (attractor_ - posBulk) -
-                    P.wellDamping * velBulk;
-
-                // Per-particle, springy inside the hold radius and decaying as
-                // 1/r outside it, so a lagging tail is pulled progressively
-                // less and eventually lets go.
-                float local = P.wellLocal * wellScale_;
-                const float r = glm::length(d);
-                if (r > P.wellHoldRadius) {
-                    const float f = P.wellHoldRadius / r;
-                    local *= f * f;
-                }
-
-                a += clampLength(aBulk + local * d, P.wellMaxAccel);
-            } else {
-                // Repel with a bounded push that fades with distance. Running
-                // the spring backwards would grow without limit and pin
-                // everything to the walls.
-                a += P.wellStiffness * wellScale_ * d / (glm::dot(d, d) + 0.25f);
-            }
-        }
+        a += wellAccel(pi, velBulk, posBulk);
+        trappedAir_[i] = vdif;
 
         accel_[i] = clampLength(a, P.maxAccel);
     }
@@ -295,6 +346,97 @@ void Fluid::step(float dt) {
                 pos_[i][k] = b;
                 if (vel_[i][k] > 0.0f) vel_[i][k] *= -P.restitution;
             }
+        }
+    }
+
+    stepDiffuse(dt, velBulk, posBulk);
+}
+
+void Fluid::stepDiffuse(float dt, const glm::vec3& velBulk, const glm::vec3& posBulk) {
+    const DiffuseParams& D = diffuse_;
+    if (!D.enabled) {
+        sprayPos_.clear();
+        sprayVel_.clear();
+        sprayLife_.clear();
+        return;
+    }
+
+    const FluidParams& P = params_;
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+
+    // Advect. Ihmsen treats spray as purely ballistic -- no forces between
+    // diffuse particles, only external ones. Here the cursor well is that
+    // external force, so thrown droplets still arc back toward it instead of
+    // sailing off in a straight line.
+    const float damp = std::max(0.0f, 1.0f - D.drag * dt);
+    std::size_t write = 0;
+    for (std::size_t k = 0; k < sprayPos_.size(); ++k) {
+        glm::vec3 v = sprayVel_[k];
+        v += (wellAccel(sprayPos_[k], velBulk, posBulk) + P.gravity) * dt;
+        v *= damp;
+        const glm::vec3 p = sprayPos_[k] + v * dt;
+
+        const float life = sprayLife_[k] - dt;
+        if (life <= 0.0f) continue;
+
+        bool escaped = false;
+        for (int c = 0; c < 3; ++c) {
+            if (std::fabs(p[c]) > P.boundsHalf[c]) escaped = true;
+        }
+        if (escaped) continue;
+
+        // Enough fluid neighbours means it has rejoined the body, so drop it
+        // rather than draw a droplet floating over the surface.
+        if (countNeighbours(p) >= D.reabsorbNeighbours) continue;
+
+        sprayPos_[write] = p;
+        sprayVel_[write] = v;
+        sprayLife_[write] = life;
+        ++write;
+    }
+    sprayPos_.resize(write);
+    sprayVel_.resize(write);
+    sprayLife_.resize(write);
+
+    // Generate (Ihmsen eq. 8): nd = Ik * (kta * Ita) * dt, with the wave-crest
+    // term dropped -- it needs surface normals, and with no gravity there is
+    // no meaningful wave crest here anyway.
+    const float rV = P.h * 0.35f;
+    const int n = static_cast<int>(pos_.size());
+    for (int i = 0; i < n && static_cast<int>(sprayPos_.size()) < D.maxCount; ++i) {
+        const glm::vec3 vf = vel_[i];
+        const float speed = glm::length(vf);
+        if (speed < 1e-4f) continue;
+
+        const float ita = phi(trappedAir_[i], D.trappedAirMin, D.trappedAirMax);
+        if (ita <= 0.0f) continue;
+
+        const float ek = 0.5f * P.mass * speed * speed;
+        const float ik = phi(ek, D.kineticMin, D.kineticMax);
+        if (ik <= 0.0f) continue;
+
+        const float nd = ik * D.spawnRate * ita * dt;
+        int count = static_cast<int>(nd);
+        if (uni(rng_) < nd - static_cast<float>(count)) ++count;
+        if (count <= 0) continue;
+
+        // Sample the cylinder swept by this particle over the step (fig. 3),
+        // which keeps the spray volumetric instead of shell-like.
+        const glm::vec3 vhat = vf / speed;
+        const glm::vec3 ref =
+            std::fabs(vhat.x) < 0.9f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::vec3 e1 = glm::normalize(glm::cross(vhat, ref));
+        const glm::vec3 e2 = glm::cross(vhat, e1);
+
+        for (int s = 0; s < count && static_cast<int>(sprayPos_.size()) < D.maxCount; ++s) {
+            const float rr = rV * std::sqrt(uni(rng_));
+            const float th = uni(rng_) * 6.2831853f;
+            const float hh = uni(rng_) * dt * speed;
+            const glm::vec3 offset = rr * std::cos(th) * e1 + rr * std::sin(th) * e2;
+
+            sprayPos_.push_back(pos_[i] + offset + hh * vhat);
+            sprayVel_.push_back(offset + vf);  // e1/e2 double as velocities
+            sprayLife_.push_back(D.lifeMin + (D.lifeMax - D.lifeMin) * ita);
         }
     }
 }

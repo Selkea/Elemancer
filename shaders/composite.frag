@@ -21,6 +21,16 @@ layout(location = 0) out vec4 outColor;
 
 const float kBackground = 1.0e6;
 
+// de Greve 2006, "Reflections and Refractions in Ray Tracing": Snell's law in
+// vector form, for eta = n1/n2. A negative radicand is total internal
+// reflection, where no ray is transmitted at all.
+vec3 refractDir(vec3 i, vec3 n, float eta) {
+    float cosi = -dot(n, i);
+    float k = 1.0 - eta * eta * (1.0 - cosi * cosi);
+    if (k < 0.0) return vec3(0.0);
+    return eta * i + (eta * cosi - sqrt(k)) * n;
+}
+
 vec3 viewPosFromDepth(vec2 uv, float dist) {
     vec4 clip = vec4(uv * 2.0 - 1.0, -1.0, 1.0);
     vec4 v = uInvProj * clip;
@@ -73,10 +83,16 @@ void main() {
     float thickness = texture(uThickness, vUV).r;
     vec3 V = normalize(-P);
 
+    // Schlick, with R0 = ((n1-n2)/(n1+n2))^2 = 0.02 for an air/water interface.
     float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
-    // Refraction: nudge the background lookup along the surface normal.
-    vec2 refractUV = clamp(vUV + N.xy * uRefractScale * min(thickness, 1.5),
+    // Refraction: offset the background lookup along the actual refracted
+    // ray rather than along the normal, so the bend responds to viewing angle
+    // the way water does. Air into water, so eta = 1 / 1.333.
+    vec3 T = refractDir(-V, N, 1.0 / 1.333);
+    if (dot(T, T) < 1e-6) fresnel = 1.0;  // total internal reflection
+
+    vec2 refractUV = clamp(vUV + T.xy * uRefractScale * min(thickness, 1.5),
                            vec2(0.001), vec2(0.999));
     vec3 refracted = texture(uScene, refractUV).rgb;
     refracted *= exp(-(vec3(1.0) - uLiquidColor) * thickness * uAbsorption);

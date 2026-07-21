@@ -261,6 +261,11 @@ int main(int argc, char** argv) {
 
         float peakSpread = 0.0f;
         float peakStrays = 0.0f;
+        // Peaks of the two quantities that gate spray generation, so the
+        // thresholds can be set against measured ranges instead of guessed.
+        float peakTrappedAir = 0.0f;
+        float peakEk = 0.0f;
+        std::size_t peakSpray = 0;
 
         const float omega = sweepSpeed / kWhipAmplitude;  // peak speed = A * omega
         for (int i = 0; i < sweep; ++i) {
@@ -272,11 +277,19 @@ int main(int argc, char** argv) {
             const auto [sp, st] = measure();
             peakSpread = std::max(peakSpread, sp);
             peakStrays = std::max(peakStrays, st);
-        }
-        std::printf("WHIP peakSpeed=%.1f peakMeanRadius=%.3f peakStrays=%.1f%%\n", sweepSpeed,
-                    peakSpread, peakStrays);
 
-        renderer.render(fluid.positions(), view, projFor(fbw, fbh), fbw, fbh);
+            peakSpray = std::max(peakSpray, fluid.sprayCount());
+            for (float ta : fluid.trappedAir()) peakTrappedAir = std::max(peakTrappedAir, ta);
+            for (const glm::vec3& v : fluid.velocities()) {
+                peakEk = std::max(peakEk, 0.5f * fluid.params().mass * glm::dot(v, v));
+            }
+        }
+        std::printf("WHIP peakSpeed=%.1f peakMeanRadius=%.3f peakStrays=%.1f%%"
+                    " peakSpray=%zu peakTrappedAir=%.2f peakEk=%.3f\n",
+                    sweepSpeed, peakSpread, peakStrays, peakSpray, peakTrappedAir, peakEk);
+
+        renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                        projFor(fbw, fbh), fbw, fbh);
         glFinish();
 
         std::vector<unsigned char> pixels(static_cast<std::size_t>(fbw) * fbh * 3);
@@ -363,7 +376,8 @@ int main(int argc, char** argv) {
                                                                             : 1.0f);
         for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
 
-        renderer.render(fluid.positions(), view, proj, fbw, fbh);
+        renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view, proj,
+                        fbw, fbh);
         glfwSwapBuffers(win);
 
         fpsAccum += frameDt;
@@ -379,9 +393,9 @@ int main(int argc, char** argv) {
             char title[256];
             std::snprintf(title, sizeof title,
                           "Elemancer  |  tension %.3f  |  well %.1f  |  visc %.1f  |  drag %.2f"
-                          "  |  %zu drops  |  %.0f fps",
+                          "  |  %zu drops  |  %zu spray  |  %.0f fps",
                           P.surfaceTension, P.wellStiffness, P.viscosity, P.drag, fluid.size(),
-                          fps);
+                          fluid.sprayCount(), fps);
             glfwSetWindowTitle(win, title);
         }
     }

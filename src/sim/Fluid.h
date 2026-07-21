@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <random>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -102,6 +103,42 @@ struct FluidParams {
     float wellDamping   = 8.0f;
 };
 
+// Diffuse material, after Ihmsen et al. 2012, "Unified Spray, Foam and Bubbles
+// for Particle-Based Fluids". Generated as a post-process over the SPH state
+// with no forces between diffuse particles, so large counts stay cheap.
+//
+// Only the spray class is modelled. Foam and bubbles both need a gravity
+// direction to mean anything -- foam floats, bubbles rise -- and this scene
+// has no world gravity by default.
+struct DiffuseParams {
+    bool enabled = true;
+
+    // Trapped air is estimated from *relative* velocity rather than curl:
+    // curl misses head-on impacts, which are exactly where air gets dragged in.
+    float trappedAirMin = 2.0f;
+    float trappedAirMax = 20.0f;
+
+    // Kinetic energy gates the whole thing, so spray appears when the liquid
+    // is actually being thrown around and not while it sits on the cursor.
+    // Particle mass is ~0.027 at h=0.05, so Ek = 0.0135 v^2. These thresholds
+    // put the onset near v=4 and saturation near v=17.
+    float kineticMin = 0.25f;
+    float kineticMax = 4.0f;
+
+    // Measured: at the tear (~speed 8) trapped air peaks near 87 and Ek near
+    // 3.5, but that is a brief instant over few particles, so the rate has to
+    // be high to put visible spray on screen.
+    float spawnRate = 900.0f;      // max samples per fluid particle per second
+    float lifeMin = 0.35f;
+    float lifeMax = 1.20f;
+    float drag = 0.8f;
+    int maxCount = 60000;
+
+    // A spray particle back inside the body has rejoined it, so it is removed
+    // rather than drawn over the surface.
+    int reabsorbNeighbours = 14;
+};
+
 // Muller-2003 SPH with a uniform grid for neighbour lookup. Deliberately free
 // of any graphics dependency so the solver can be exercised headlessly.
 class Fluid {
@@ -126,15 +163,35 @@ public:
     const FluidParams& params() const { return params_; }
     FluidParams& params() { return params_; }
 
+    DiffuseParams& diffuse() { return diffuse_; }
+    const DiffuseParams& diffuse() const { return diffuse_; }
+
+    // Spray, as position + remaining life. Life is exposed so the renderer can
+    // fade a droplet out rather than popping it.
+    const std::vector<glm::vec3>& sprayPositions() const { return sprayPos_; }
+    const std::vector<float>& sprayLife() const { return sprayLife_; }
+    const std::vector<float>& trappedAir() const { return trappedAir_; }
+    std::size_t sprayCount() const { return sprayPos_.size(); }
+
 private:
     void rebuildGrid();
     void buildGrid();
     int cellIndex(const glm::vec3& p) const;
+    int countNeighbours(const glm::vec3& p) const;
+    glm::vec3 wellAccel(const glm::vec3& p, const glm::vec3& velBulk,
+                        const glm::vec3& posBulk) const;
+    void stepDiffuse(float dt, const glm::vec3& velBulk, const glm::vec3& posBulk);
 
     FluidParams params_;
+    DiffuseParams diffuse_;
 
     std::vector<glm::vec3> pos_, vel_, accel_;
     std::vector<float> density_, pressure_;
+    std::vector<float> trappedAir_;
+
+    std::vector<glm::vec3> sprayPos_, sprayVel_;
+    std::vector<float> sprayLife_;
+    std::mt19937 rng_{9271u};
 
     // Uniform grid stored as one intrusive linked list per cell.
     std::vector<int> cellHead_;
