@@ -223,7 +223,8 @@ void FluidRenderer::drawQuad() const {
 void FluidRenderer::render(const std::vector<glm::vec3>& positions,
                            const std::vector<glm::vec3>& sprayPositions,
                            const std::vector<float>& sprayLife, const glm::mat4& view,
-                           const glm::mat4& proj, int fbWidth, int fbHeight) {
+                           const glm::mat4& proj, int fbWidth, int fbHeight,
+                           float timeSeconds) {
     if (fbWidth <= 0 || fbHeight <= 0) return;
     ensureTargets(fbWidth, fbHeight);
 
@@ -251,6 +252,7 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     setMat4(progBackground_, "uInvProj", invProj);
     setMat4(progBackground_, "uInvView", invView);
     setVec3(progBackground_, "uLightDirWorld", settings_.lightDirWorld);
+    setFloat(progBackground_, "uTime", timeSeconds);
     drawQuad();
 
     // 2. View-space depth of the nearest liquid surface.
@@ -327,6 +329,7 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     setVec2(progComposite_, "uTexel", glm::vec2(texelX, texelY));
     setVec3(progComposite_, "uLightDirView", glm::vec3(lightDirView));
     setVec3(progComposite_, "uLightDirWorld", settings_.lightDirWorld);
+    setFloat(progComposite_, "uTime", timeSeconds);
     setVec3(progComposite_, "uLiquidColor", settings_.liquidColor);
     setFloat(progComposite_, "uRefractScale", settings_.refractScale);
     setFloat(progComposite_, "uAbsorption", settings_.absorption);

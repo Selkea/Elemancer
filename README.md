@@ -42,6 +42,7 @@ peak cursor speed of 5, begins to shed at 6, and tears properly at 8.
 | `-` `=` | Well strength |
 | `9` `0` | Hold radius — the cursor speed at which the liquid starts to tear |
 | `O` `P` | Clarity — `O` toward clear glass, `P` toward deeper colour |
+| `K` `L` | Spin — how fast the body rotates about its own centroid |
 | `,` `.` | Viscosity |
 | `;` `'` | Drag |
 | `G` | Toggle world gravity |
@@ -82,6 +83,10 @@ workspace needs the same files at that parent's root.
 - **Refraction / Fresnel** — de Greve 2006, "Reflections and Refractions in
   Ray Tracing": Snell's law in vector form for the background bend, Schlick
   reflectance with R0 = 0.02 for the air/water interface.
+- **Environment** — a procedural sky (gradient, drifting fbm clouds, sun) over
+  a checkered floor plane with distance fog. Shared by the background pass and
+  the liquid's reflections, and gives the clear water detail to lens and mirror
+  (`shaders/common_env.glsl`).
 
 ## Layout
 

@@ -12,6 +12,7 @@ void main() {
     vec4 v = uInvProj * clip;
     vec3 dirView = normalize(v.xyz / v.w);
     vec3 dirWorld = normalize((uInvView * vec4(dirView, 0.0)).xyz);
+    vec3 ro = (uInvView * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 
-    outColor = vec4(envColor(dirWorld), 1.0);
+    outColor = vec4(envColor(ro, dirWorld), 1.0);
 }

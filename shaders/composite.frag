@@ -98,9 +98,10 @@ void main() {
     vec3 refracted = texture(uScene, refractUV).rgb;
     refracted *= exp(-(vec3(1.0) - uLiquidColor) * thickness * uAbsorption);
 
+    vec3 Pworld = (uInvView * vec4(P, 1.0)).xyz;
     vec3 Nworld = normalize((uInvView * vec4(N, 0.0)).xyz);
     vec3 Vworld = normalize((uInvView * vec4(V, 0.0)).xyz);
-    vec3 reflected = envColor(reflect(-Vworld, Nworld));
+    vec3 reflected = envColor(Pworld, reflect(-Vworld, Nworld));
 
     vec3 color = mix(refracted, reflected, fresnel);
 

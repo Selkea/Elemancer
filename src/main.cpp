@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
                     sweepSpeed, peakSpread, peakStrays, peakSpray, peakTrappedAir, peakEk);
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
-                        projFor(fbw, fbh), fbw, fbh);
+                        projFor(fbw, fbh), fbw, fbh, 6.0f);
         glFinish();
 
         std::vector<unsigned char> pixels(static_cast<std::size_t>(fbw) * fbh * 3);
@@ -304,6 +304,23 @@ int main(int argc, char** argv) {
         for (const glm::vec3& p : fluid.positions()) spread += glm::length(p - centroid);
         spread /= static_cast<float>(fluid.size());
 
+        // Measured angular velocity about the centroid, projected on the spin
+        // axis. Least-squares fit of a rigid rotation to the relative
+        // velocities: omega = (sum r x v_rel) / (sum |r|^2). A still frame
+        // cannot show spin, so this is how the shot proves the body is turning.
+        glm::vec3 velMean(0.0f);
+        for (const glm::vec3& v : fluid.velocities()) velMean += v;
+        velMean /= static_cast<float>(fluid.size());
+        glm::vec3 angMom(0.0f);
+        float inertia = 0.0f;
+        for (std::size_t i = 0; i < fluid.size(); ++i) {
+            const glm::vec3 r = fluid.positions()[i] - centroid;
+            angMom += glm::cross(r, fluid.velocities()[i] - velMean);
+            inertia += glm::dot(r, r);
+        }
+        const glm::vec3 bodyOmega = inertia > 0.0f ? angMom / inertia : glm::vec3(0.0f);
+        const float omegaAxial = glm::dot(bodyOmega, glm::normalize(fluid.params().spinAxis));
+
         // Fraction of the body still travelling with the bulk: anything more
         // than a body-radius away from the centroid has torn off.
         int strays = 0;
@@ -313,10 +330,10 @@ int main(int argc, char** argv) {
 
         const bool ok = saveBMP(shotPath, fbw, fbh, pixels);
         std::printf("SHOT file=%s %dx%d sweepSpeed=%.1f centroid=(%.3f, %.3f, %.3f)"
-                    " meanRadius=%.3f wellLag=%.3f strays=%.1f%% saved=%d\n",
+                    " meanRadius=%.3f wellLag=%.3f strays=%.1f%% omegaAxial=%.2f saved=%d\n",
                     shotPath.c_str(), fbw, fbh, sweepSpeed, centroid.x, centroid.y, centroid.z,
                     spread, glm::length(centroid - wellPos),
-                    100.0f * strays / static_cast<float>(fluid.size()), ok ? 1 : 0);
+                    100.0f * strays / static_cast<float>(fluid.size()), omegaAxial, ok ? 1 : 0);
 
         renderer.shutdown();
         glfwDestroyWindow(win);
@@ -326,7 +343,7 @@ int main(int argc, char** argv) {
 
     std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
-    std::printf("[elemancer] 9 0 hold radius | O P clarity\n");
+    std::printf("[elemancer] 9 0 hold radius | O P clarity | K L spin\n");
     std::printf("[elemancer] G gravity | R reset | Esc quit\n");
 
     KeyEdge gravityKey, resetKey;
@@ -365,6 +382,7 @@ int main(int argc, char** argv) {
         // so O clears it toward glass and P deepens the colour.
         holdAdjust(win, GLFW_KEY_O, GLFW_KEY_P, renderer.settings().absorption, 1.5f, frameDt,
                    0.02f, 2.5f);
+        holdAdjust(win, GLFW_KEY_K, GLFW_KEY_L, P.spinRate, 1.5f, frameDt, 0.1f, 12.0f);
 
         if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
         if (gravityKey.justPressed(win, GLFW_KEY_G)) {
@@ -382,7 +400,7 @@ int main(int argc, char** argv) {
         for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view, proj,
-                        fbw, fbh);
+                        fbw, fbh, static_cast<float>(glfwGetTime()));
         glfwSwapBuffers(win);
 
         fpsAccum += frameDt;

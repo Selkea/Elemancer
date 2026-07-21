@@ -101,6 +101,16 @@ struct FluidParams {
     // orbiting it. Uses the mean velocity rather than each particle's own, so
     // it never damps internal motion and the slosh survives.
     float wellDamping   = 8.0f;
+
+    // Imposed spin about the body's own centroid. Each particle is driven
+    // toward the rigid-rotation velocity field w x r, firmly enough to keep
+    // turning against drag but gently enough that the liquid still sloshes and
+    // deforms rather than turning as a solid. The bulk-relative velocity is
+    // used, so this rotation is invisible to wellDamping and does not fight
+    // the body following the cursor.
+    float spinRate     = 2.6f;                    // rad/s
+    float spinStrength = 3.0f;                    // 1/s, drive toward that field
+    glm::vec3 spinAxis = glm::vec3(0.18f, 1.0f, 0.12f);  // normalised in use
 };
 
 // Diffuse material, after Ihmsen et al. 2012, "Unified Spray, Foam and Bubbles

@@ -320,6 +320,17 @@ void Fluid::step(float dt) {
         glm::vec3 a = (fPress + fVisc) / density_[i] + aCohesion + P.gravity;
 
         a += wellAccel(pi, velBulk, posBulk);
+
+        // Drive the body toward a rigid rotation about its centroid. Target is
+        // the relative velocity w x r; we push the actual relative velocity
+        // toward it, so the term both spins the body up and stops it running
+        // away, like a rotational viscosity.
+        if (P.spinRate != 0.0f) {
+            const glm::vec3 omega = glm::normalize(P.spinAxis) * P.spinRate;
+            const glm::vec3 vTarget = glm::cross(omega, pi - posBulk);
+            a += P.spinStrength * (vTarget - (vi - velBulk));
+        }
+
         trappedAir_[i] = vdif;
 
         accel_[i] = clampLength(a, P.maxAccel);

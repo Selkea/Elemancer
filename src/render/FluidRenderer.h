@@ -58,7 +58,7 @@ public:
     void render(const std::vector<glm::vec3>& positions,
                 const std::vector<glm::vec3>& sprayPositions,
                 const std::vector<float>& sprayLife, const glm::mat4& view,
-                const glm::mat4& proj, int fbWidth, int fbHeight);
+                const glm::mat4& proj, int fbWidth, int fbHeight, float timeSeconds);
 
     Settings& settings() { return settings_; }
     const Settings& settings() const { return settings_; }
