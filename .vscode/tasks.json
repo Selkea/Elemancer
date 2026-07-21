@@ -1,0 +1,74 @@
+{
+  "//": "For when Elemancer is opened as its own folder. The copy that VS Code actually reads for the Desktop/Claude workspace lives at that workspace's root .vscode/.",
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Elemancer: Build",
+      "detail": "Compile with Ninja (default build task, Ctrl+Shift+B)",
+      "type": "shell",
+      "command": "C:/msys64/ucrt64/bin/cmake.exe",
+      "args": ["--build", "${workspaceFolder}/build"],
+      "options": {
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+      },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "silent", "clear": true }
+    },
+    {
+      "label": "Elemancer: Configure",
+      "detail": "Regenerate the CMake build tree",
+      "type": "shell",
+      "command": "C:/msys64/ucrt64/bin/cmake.exe",
+      "args": [
+        "-S", "${workspaceFolder}",
+        "-B", "${workspaceFolder}/build",
+        "-G", "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "options": {
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Elemancer: Run",
+      "detail": "Build, then launch the interactive window",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/elemancer.exe",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+      },
+      "dependsOn": "Elemancer: Build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Elemancer: Test (headless)",
+      "detail": "Run the solver check, prints SIMTEST ... PASS/FAIL",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/test_sim.exe",
+      "options": {
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+      },
+      "dependsOn": "Elemancer: Build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    },
+    {
+      "label": "Elemancer: Shot (headless capture)",
+      "detail": "Render one frame with no window to shot.bmp",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/elemancer.exe",
+      "args": ["--shot", "${workspaceFolder}/shot.bmp"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+      },
+      "dependsOn": "Elemancer: Build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    }
+  ]
+}

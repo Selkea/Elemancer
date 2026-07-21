@@ -1,0 +1,52 @@
+{
+  "//": "For when Elemancer is opened as its own folder. The copy VS Code reads for the Desktop/Claude workspace lives at that workspace's root .vscode/.",
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Elemancer",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/elemancer.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb.exe",
+      "preLaunchTask": "Elemancer: Build",
+      "environment": [
+        {
+          "comment": "glfw3/glew32/libstdc++ DLLs live here; without this the exe will not start",
+          "name": "PATH",
+          "value": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+        }
+      ],
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    },
+    {
+      "name": "Elemancer (headless shot)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/elemancer.exe",
+      "args": ["--shot", "${workspaceFolder}/shot.bmp"],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb.exe",
+      "preLaunchTask": "Elemancer: Build",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+        }
+      ]
+    }
+  ]
+}

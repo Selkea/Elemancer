@@ -31,6 +31,19 @@ cmake --build build
 | `R` | Reset |
 | `Esc` | Quit |
 
+## Running from VS Code
+
+`Ctrl+Shift+B` builds. `F5` builds and launches under gdb. Other targets are
+under **Terminal > Run Task**: `Elemancer: Run`, `Elemancer: Test (headless)`,
+`Elemancer: Shot (headless capture)`.
+
+Every task prepends `C:\msys64\ucrt64\bin` to `PATH` — the `glfw3`, `glew32`
+and `libstdc++` DLLs live there and the executable will not start without it.
+
+Note that VS Code only reads `.vscode/` from the **workspace root**. The copies
+here apply when this folder is opened directly; opening a parent folder as the
+workspace needs the same files at that parent's root.
+
 ## Layout
 
 - `src/sim/` — SPH solver. No graphics dependency, so it runs headless in tests.
