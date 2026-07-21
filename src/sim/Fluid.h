@@ -38,6 +38,23 @@ struct FluidParams {
     // spacing^3, so a change of scale quietly destroys surface tension.
     float surfaceTension = 0.45f;
 
+    // Hard floor on particle separation.
+    //
+    // Both restoring terms vanish as r -> 0: the spiky pressure gradient is
+    // finite at zero, and the cohesion spline carries an r^3 factor. So once
+    // cohesion and the well together beat peak pressure repulsion, nothing
+    // stops the body collapsing to a point. Measured at tension 3 / well 80:
+    // 4000 particles crushed to meanRadius 0.027, about 500x rest density.
+    // That is fatal twice over -- the liquid freezes into a dot, and at that
+    // spacing every particle is a neighbour of every other, so the uniform
+    // grid degenerates to O(n^2) and the frame rate falls off a cliff.
+    //
+    // This term diverges as r -> 0, which bounds density, which bounds cell
+    // occupancy, which bounds the neighbour cost. It also makes the liquid
+    // behave far more incompressibly, which water does anyway.
+    float antiClump = 600.0f;
+    float antiClumpRadius = 0.5f;  // as a fraction of h; rest spacing is 0.6h
+
     // Cursor gravity well, with Plummer softening. The softening length must
     // be on the order of the body radius: any smaller and the well becomes a
     // singularity buried inside the liquid that slingshots particles out

@@ -131,6 +131,7 @@ void Fluid::step(float dt) {
     const float spikyCoef = -45.0f / (kPi * std::pow(h, 6.0f));
     const float viscCoef = 45.0f / (kPi * std::pow(h, 6.0f));
     const float cohesionCoef = 32.0f / (kPi * std::pow(h, 9.0f));
+    const float rMin = h * P.antiClumpRadius;
 
     buildGrid();
 
@@ -215,6 +216,13 @@ void Fluid::step(float dt) {
                             // Acceleration directly: F/m_i = gamma * m_j * C.
                             aCohesion += -P.surfaceTension * m *
                                          cohesionSpline(r, h, cohesionCoef) * (d / r);
+
+                            // Separation floor. Ramp is capped so a pair that
+                            // starts coincident cannot produce a huge impulse.
+                            if (r < rMin) {
+                                const float push = std::min(rMin / r - 1.0f, 8.0f);
+                                aCohesion += P.antiClump * push * (d / r);
+                            }
                         }
                         fVisc += P.viscosity * m * (vel_[j] - vi) / rhoj * (viscCoef * (h - r));
                     }

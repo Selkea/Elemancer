@@ -142,6 +142,8 @@ int main(int argc, char** argv) {
     std::string shotPath = "elemancer_shot.bmp";
     int particleCount = 4000;
     int shotFrames = 420;
+    float tensionOverride = -1.0f;
+    float wellOverride = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -152,6 +154,10 @@ int main(int argc, char** argv) {
             particleCount = std::atoi(argv[++i]);
         } else if (a == "--frames" && i + 1 < argc) {
             shotFrames = std::atoi(argv[++i]);
+        } else if (a == "--tension" && i + 1 < argc) {
+            tensionOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--well" && i + 1 < argc) {
+            wellOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -194,7 +200,10 @@ int main(int argc, char** argv) {
 
     elem::Fluid fluid;
     fluid.init(particleCount);
-    std::printf("[elemancer] particles=%zu\n", fluid.size());
+    if (tensionOverride > 0.0f) fluid.params().surfaceTension = tensionOverride;
+    if (wellOverride > 0.0f) fluid.params().attractG = wellOverride;
+    std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
+                fluid.params().surfaceTension, fluid.params().attractG);
 
     const glm::vec3 eye(0.0f, 0.0f, kCamDistance);
     const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -288,8 +297,8 @@ int main(int argc, char** argv) {
 
         elem::FluidParams& P = fluid.params();
         holdAdjust(win, GLFW_KEY_LEFT_BRACKET, GLFW_KEY_RIGHT_BRACKET, P.surfaceTension, 1.5f,
-                   frameDt, 0.005f, 5.0f);
-        holdAdjust(win, GLFW_KEY_MINUS, GLFW_KEY_EQUAL, P.attractG, 1.5f, frameDt, 0.2f, 80.0f);
+                   frameDt, 0.005f, 2.5f);
+        holdAdjust(win, GLFW_KEY_MINUS, GLFW_KEY_EQUAL, P.attractG, 1.5f, frameDt, 0.2f, 40.0f);
         holdAdjust(win, GLFW_KEY_COMMA, GLFW_KEY_PERIOD, P.viscosity, 1.5f, frameDt, 0.1f, 60.0f);
         holdAdjust(win, GLFW_KEY_SEMICOLON, GLFW_KEY_APOSTROPHE, P.drag, 1.5f, frameDt, 0.01f,
                    5.0f);

@@ -20,6 +20,9 @@ cmake --build build
 ./build/elemancer                    # interactive
 ./build/elemancer --shot out.bmp     # headless capture, for verification
 ./build/test_sim                     # headless solver check, prints PASS/FAIL
+
+# Override tunables to reproduce a tuning pathology headlessly, and time it
+./build/elemancer --shot out.bmp --frames 150 --tension 3 --well 80
 ```
 
 | Input | Effect |
