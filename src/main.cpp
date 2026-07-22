@@ -208,6 +208,7 @@ int main(int argc, char** argv) {
     float distOverride = -1.0f;  // camera distance for the shot; scroll does this live
     bool measureJitter = false;  // report frame-to-frame pixel diff of a moving body
     bool noTemporal = false;     // disable temporal surface smoothing, for A/B
+    float spinOverride = -1.0f;  // spin rate for the shot
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -232,6 +233,8 @@ int main(int argc, char** argv) {
             measureJitter = true;
         } else if (a == "--notemporal") {
             noTemporal = true;
+        } else if (a == "--spin" && i + 1 < argc) {
+            spinOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -278,6 +281,7 @@ int main(int argc, char** argv) {
     fluid.init(particleCount);
     if (tensionOverride > 0.0f) fluid.params().surfaceTension = tensionOverride;
     if (wellOverride > 0.0f) fluid.params().wellStiffness = wellOverride;
+    if (spinOverride >= 0.0f) fluid.params().spinRate = spinOverride;
     std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
                 fluid.params().surfaceTension, fluid.params().wellStiffness);
 
@@ -504,7 +508,10 @@ int main(int argc, char** argv) {
         // so O clears it toward glass and P deepens the colour.
         holdAdjust(win, GLFW_KEY_O, GLFW_KEY_P, renderer.settings().absorption, 1.5f, frameDt,
                    0.02f, 2.5f);
-        holdAdjust(win, GLFW_KEY_K, GLFW_KEY_L, P.spinRate, 1.5f, frameDt, 0.1f, 12.0f);
+        // Linear so it can reach exactly zero (exponential scaling never can).
+        if (glfwGetKey(win, GLFW_KEY_K) == GLFW_PRESS) P.spinRate -= 5.0f * frameDt;
+        if (glfwGetKey(win, GLFW_KEY_L) == GLFW_PRESS) P.spinRate += 5.0f * frameDt;
+        P.spinRate = std::clamp(P.spinRate, 0.0f, 12.0f);
 
         if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
         if (gravityKey.justPressed(win, GLFW_KEY_G)) {

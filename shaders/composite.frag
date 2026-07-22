@@ -53,27 +53,33 @@ void main() {
     // One-sided differences, keeping whichever neighbour is nearer in depth.
     // A neighbour that landed on the background must be rejected outright:
     // differencing against 1e6 produces a garbage normal, which is what shows
-    // up as black speckle along the silhouette.
-    float dR = texture(uDepth, vUV + vec2(uTexel.x, 0.0)).r;
-    float dL = texture(uDepth, vUV - vec2(uTexel.x, 0.0)).r;
-    float dU = texture(uDepth, vUV + vec2(0.0, uTexel.y)).r;
-    float dD = texture(uDepth, vUV - vec2(0.0, uTexel.y)).r;
+    // up as black speckle along the silhouette. The derivative baseline is a
+    // few texels wide, not one: a longer finite difference is far less
+    // sensitive to per-pixel depth noise, which is what streaks the reflection
+    // at the grazing rim where the surface is nearly tangent to view.
+    vec2 sx = vec2(uTexel.x * 3.0, 0.0);
+    vec2 sy = vec2(0.0, uTexel.y * 3.0);
+
+    float dR = texture(uDepth, vUV + sx).r;
+    float dL = texture(uDepth, vUV - sx).r;
+    float dU = texture(uDepth, vUV + sy).r;
+    float dD = texture(uDepth, vUV - sy).r;
 
     bool okR = dR < kBackground * 0.5;
     bool okL = dL < kBackground * 0.5;
     bool okU = dU < kBackground * 0.5;
     bool okD = dD < kBackground * 0.5;
 
-    vec3 right = viewPosFromDepth(vUV + vec2(uTexel.x, 0.0), dR) - P;
-    vec3 left = P - viewPosFromDepth(vUV - vec2(uTexel.x, 0.0), dL);
-    vec3 ddx = vec3(uTexel.x, 0.0, 0.0);
+    vec3 right = viewPosFromDepth(vUV + sx, dR) - P;
+    vec3 left = P - viewPosFromDepth(vUV - sx, dL);
+    vec3 ddx = vec3(sx.x, 0.0, 0.0);
     if (okR && okL) ddx = abs(left.z) < abs(right.z) ? left : right;
     else if (okR) ddx = right;
     else if (okL) ddx = left;
 
-    vec3 up = viewPosFromDepth(vUV + vec2(0.0, uTexel.y), dU) - P;
-    vec3 down = P - viewPosFromDepth(vUV - vec2(0.0, uTexel.y), dD);
-    vec3 ddy = vec3(0.0, uTexel.y, 0.0);
+    vec3 up = viewPosFromDepth(vUV + sy, dU) - P;
+    vec3 down = P - viewPosFromDepth(vUV - sy, dD);
+    vec3 ddy = vec3(0.0, sy.y, 0.0);
     if (okU && okD) ddy = abs(down.z) < abs(up.z) ? down : up;
     else if (okU) ddy = up;
     else if (okD) ddy = down;
@@ -101,7 +107,21 @@ void main() {
     vec3 Pworld = (uInvView * vec4(P, 1.0)).xyz;
     vec3 Nworld = normalize((uInvView * vec4(N, 0.0)).xyz);
     vec3 Vworld = normalize((uInvView * vec4(V, 0.0)).xyz);
-    vec3 reflected = envColor(Pworld, reflect(-Vworld, Nworld));
+
+    // Glossy reflection: average the environment over a small cone rather than
+    // taking a single mirror sample. At the grazing rim the reflected ray
+    // sweeps fast across the bright sky, so a mirror sample turns any residual
+    // normal wrinkle into a streak; spreading the taps smooths that out and
+    // reads more like water than chrome.
+    vec3 refl = reflect(-Vworld, Nworld);
+    vec3 t1 = normalize(cross(Nworld, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
+    vec3 t2 = cross(Nworld, t1);
+    const float k = 0.035;
+    vec3 reflected = (envColor(Pworld, refl) + envColor(Pworld, normalize(refl + k * t1)) +
+                      envColor(Pworld, normalize(refl - k * t1)) +
+                      envColor(Pworld, normalize(refl + k * t2)) +
+                      envColor(Pworld, normalize(refl - k * t2))) *
+                     0.2;
 
     vec3 color = mix(refracted, reflected, fresnel);
 
@@ -111,7 +131,17 @@ void main() {
 
     vec3 L = normalize(uLightDirView);
     vec3 H = normalize(L + V);
-    color += vec3(1.0, 0.97, 0.92) * pow(max(dot(N, H), 0.0), 180.0) * 0.7;
+    // A softer, wider highlight than a mirror glint: a razor-tight specular
+    // turns every residual normal wrinkle into a separate speckle.
+    color += vec3(1.0, 0.97, 0.92) * pow(max(dot(N, H), 0.0), 90.0) * 0.7;
+
+    // Fade the razor-thin rim into the background. The reconstructed normal is
+    // unreliable at the silhouette (its outward neighbour is background), so it
+    // streaks the reflection there; a real thin film of water is nearly
+    // invisible anyway, so fading it both hides the artefact and softens the
+    // edge.
+    float edge = smoothstep(0.0, 0.05, thickness);
+    color = mix(background, color, edge);
 
     outColor = vec4(color, 1.0);
 }

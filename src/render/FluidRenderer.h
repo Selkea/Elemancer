@@ -18,19 +18,22 @@ class FluidRenderer {
 public:
     struct Settings {
         // Must exceed the solver's particle spacing (h * 0.6 = 0.03), or the
-        // spheres never overlap and the surface reads as loose beads. At 1.5x
-        // spacing a lone particle renders as a single water droplet.
-        float radius = 0.045f;        // particle radius, world units
-        int blurIterations = 2;       // each iteration is one H + one V pass
+        // spheres never overlap and the surface reads as loose beads. Bigger
+        // also means more overlap, which is a smoother base surface.
+        float radius = 0.052f;        // particle radius, world units
+        int blurIterations = 5;       // each iteration is one H + one V pass
 
-        // The blur has to be wide enough to span a particle on screen, but no
-        // wider or separate droplets smear together. These spheres cover
-        // ~17px, so the kernel is sized to match.
-        float blurRadius = 10.0f;     // taps either side
-        float sigmaSpatial = 4.5f;
-        // Must exceed the depth gap between neighbouring particles (~one
-        // radius) to fuse them, while staying small enough to keep silhouettes.
-        float sigmaDepth = 0.05f;
+        // The blur smooths the per-particle bumps out of the reconstructed
+        // normals. Too narrow and the surface stays lumpy (and boils under
+        // rotation); too wide and real detail is lost. Widened once the surface
+        // read as lumpy at particle scale.
+        float blurRadius = 16.0f;     // taps either side
+        float sigmaSpatial = 8.0f;
+        // Kept tight on purpose: a loose depth sigma lets the blur bleed the
+        // silhouette outward into a skirt of bad-normal surface that mirrors
+        // the bright sky and streaks. Tight enough to not cross the silhouette,
+        // relying on many iterations to smooth the interior instead.
+        float sigmaDepth = 0.035f;
 
         // Temporal smoothing of the surface, to stop it boiling while the body
         // moves or rotates. Blend is how much of the previous frame is kept;
