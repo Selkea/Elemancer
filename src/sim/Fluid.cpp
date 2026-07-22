@@ -358,7 +358,10 @@ void Fluid::step(float dt) {
         // the relative velocity w x r; we push the actual relative velocity
         // toward it, so the term both spins the body up and stops it running
         // away, like a rotational viscosity.
-        if (P.spinRate != 0.0f) {
+        //
+        // Only while the well is actively pulling: a released, falling or pooled
+        // body must not be spun by the cursor it is no longer attached to.
+        if (P.spinRate != 0.0f && attractOn_ && wellScale_ > 0.0f) {
             const glm::vec3 omega = glm::normalize(P.spinAxis) * P.spinRate;
             const glm::vec3 vTarget = glm::cross(omega, pi - posBulk);
             a += P.spinStrength * (vTarget - (vi - velBulk));

@@ -358,11 +358,24 @@ int main(int argc, char** argv) {
             glReadBuffer(GL_BACK);
             glReadPixels(0, 0, fbw, fbh, GL_RGB, GL_UNSIGNED_BYTE, px.data());
             glm::vec3 c(0.0f);
-            for (const glm::vec3& p : fluid.positions()) c += p;
+            glm::vec3 vmean(0.0f);
+            for (std::size_t i = 0; i < fluid.size(); ++i) {
+                c += fluid.positions()[i];
+                vmean += fluid.velocities()[i];
+            }
             c /= static_cast<float>(fluid.size());
+            vmean /= static_cast<float>(fluid.size());
+            glm::vec3 angMom(0.0f);
+            float inertia = 0.0f;
+            for (std::size_t i = 0; i < fluid.size(); ++i) {
+                const glm::vec3 r = fluid.positions()[i] - c;
+                angMom += glm::cross(r, fluid.velocities()[i] - vmean);
+                inertia += glm::dot(r, r);
+            }
+            const float spin = inertia > 0.0f ? glm::length(angMom / inertia) : 0.0f;
             const bool okd = saveBMP(shotPath, fbw, fbh, px);
-            std::printf("DROP file=%s centroid.y=%.3f (floor=%.2f) saved=%d\n", shotPath.c_str(),
-                        c.y, fluid.params().floorY, okd ? 1 : 0);
+            std::printf("DROP file=%s centroid.y=%.3f (floor=%.2f) residualSpin=%.3f saved=%d\n",
+                        shotPath.c_str(), c.y, fluid.params().floorY, spin, okd ? 1 : 0);
             renderer.shutdown();
             glfwDestroyWindow(win);
             glfwTerminate();
