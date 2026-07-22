@@ -39,6 +39,7 @@ constexpr float kDt = 1.0f / 640.0f;
 constexpr float kFovDegrees = 45.0f;
 constexpr float kCamDistance = 5.0f;
 constexpr float kDepthHalf = 0.7f;
+constexpr float kGravity = 22.0f;  // downward pull in gravity mode
 
 // Accumulated mouse-wheel movement, drained each frame to dolly the camera.
 // GLFW scroll only arrives through a callback, so it lands here.
@@ -168,10 +169,10 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity) {
 std::vector<std::string> hudControlLines() {
     return {
         "ELEMANCER",
-        "Mouse: move well    LMB: pull    RMB: repel    Scroll: zoom",
+        "Mouse: move well    LMB: pull/grab    RMB: repel    Scroll: zoom",
         "[ ] tension     - = well     , . viscosity     ; ' drag",
         "9 0 hold radius     O P clarity     K L spin",
-        "G gravity     R reset     S save     Tab hide     Esc quit",
+        "G gravity mode (LMB grabs)   R reset   S save   Tab hide   Esc quit",
     };
 }
 
@@ -214,6 +215,7 @@ int main(int argc, char** argv) {
     float viscOverride = -1.0f;
     float hOverride = -1.0f;
     float gravityOverride = 0.0f;
+    bool dropMode = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -250,6 +252,8 @@ int main(int argc, char** argv) {
             hOverride = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--gravity" && i + 1 < argc) {
             gravityOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--drop") {
+            dropMode = true;
         }
     }
 
@@ -336,6 +340,33 @@ int main(int argc, char** argv) {
         fluid.setAttractor(wellPos, true);
         for (int i = 0; i < settle; ++i) {
             for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+        }
+
+        // --drop: release the well and let gravity pool the liquid on the floor,
+        // which is what pressing G does interactively.
+        if (dropMode) {
+            fluid.params().gravity = glm::vec3(0.0f, -kGravity, 0.0f);
+            fluid.setAttractor(wellPos, false);
+            for (int i = 0; i < shotFrames; ++i) {
+                for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            }
+            renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                            projFor(fbw, fbh), fbw, fbh, 6.0f);
+            glFinish();
+            std::vector<unsigned char> px(static_cast<std::size_t>(fbw) * fbh * 3);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadBuffer(GL_BACK);
+            glReadPixels(0, 0, fbw, fbh, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+            glm::vec3 c(0.0f);
+            for (const glm::vec3& p : fluid.positions()) c += p;
+            c /= static_cast<float>(fluid.size());
+            const bool okd = saveBMP(shotPath, fbw, fbh, px);
+            std::printf("DROP file=%s centroid.y=%.3f (floor=%.2f) saved=%d\n", shotPath.c_str(),
+                        c.y, fluid.params().floorY, okd ? 1 : 0);
+            renderer.shutdown();
+            glfwDestroyWindow(win);
+            glfwTerminate();
+            return okd ? 0 : 1;
         }
 
         // Sampling one instant makes the result depend on where in the
@@ -470,10 +501,10 @@ int main(int argc, char** argv) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
 
-    std::printf("[elemancer] mouse moves the well | LMB pull | RMB repel | scroll zoom\n");
+    std::printf("[elemancer] mouse moves the well | LMB pull/grab | RMB repel | scroll zoom\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
     std::printf("[elemancer] 9 0 hold radius | O P clarity | K L spin\n");
-    std::printf("[elemancer] G gravity | R reset | S save | Tab hide HUD | Esc quit\n");
+    std::printf("[elemancer] G gravity mode (hold LMB to grab) | R reset | S save | Tab | Esc\n");
 
     elem::Hud hud;
     if (!hud.init()) std::fprintf(stderr, "[elemancer] hud init failed\n");
@@ -484,6 +515,7 @@ int main(int argc, char** argv) {
 
     // Camera dolly, driven by the scroll wheel.
     float camDistance = kCamDistance;
+    bool gravityMode = false;  // toggled by G: liquid falls, LMB grabs it back
 
     auto last = std::chrono::high_resolution_clock::now();
     double titleTimer = 0.0;
@@ -534,12 +566,7 @@ int main(int argc, char** argv) {
         P.spinRate = std::clamp(P.spinRate, 0.0f, 12.0f);
 
         if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
-        if (gravityKey.justPressed(win, GLFW_KEY_G)) {
-            // Strong enough to droop the body clearly below the cursor: the
-            // well is stiff, so a gentle -4 barely sagged it and read as "G
-            // does nothing".
-            P.gravity = (P.gravity.y < -0.1f) ? glm::vec3(0.0f) : glm::vec3(0.0f, -16.0f, 0.0f);
-        }
+        if (gravityKey.justPressed(win, GLFW_KEY_G)) gravityMode = !gravityMode;
         if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
         if (saveKey.justPressed(win, GLFW_KEY_S)) {
             saveConfig(cfgPath, P, renderer.settings().absorption);
@@ -549,12 +576,23 @@ int main(int argc, char** argv) {
         const glm::mat4 proj = projFor(fbw, fbh);
         fluid.setBounds(
             boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), camDistance));
-        fluid.setAttractor(cursorOnPlane(win, view, proj), true);
+        const glm::vec3 cursor = cursorOnPlane(win, view, proj);
+        const bool lmb = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        const bool rmb = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
-        fluid.setWellScale(
-            glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ? -1.0f
-            : glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS ? 3.0f
-                                                                            : 1.0f);
+        if (gravityMode) {
+            // Gravity mode: the liquid falls and pools on the floor. The well is
+            // released, so hold LMB to grab it back up (RMB still repels).
+            P.gravity = glm::vec3(0.0f, -kGravity, 0.0f);
+            fluid.setAttractor(cursor, lmb || rmb);
+            fluid.setWellScale(rmb ? -1.0f : 1.5f);
+        } else {
+            // Follow mode: the well always holds the liquid at the cursor.
+            P.gravity = glm::vec3(0.0f);
+            fluid.setAttractor(cursor, true);
+            fluid.setWellScale(rmb ? -1.0f : lmb ? 3.0f : 1.0f);
+        }
+
         for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view, proj,

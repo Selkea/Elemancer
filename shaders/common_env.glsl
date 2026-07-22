@@ -10,7 +10,7 @@
 uniform vec3 uLightDirWorld;
 uniform float uTime;
 
-const float kFloorY = -2.6;
+const float kFloorY = -1.9;  // must match FluidParams::floorY so the liquid pools on it
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 345.45));

@@ -381,7 +381,8 @@ void Fluid::step(float dt) {
             continue;
         }
 
-        for (int k = 0; k < 3; ++k) {
+        // x and z: symmetric walls around the origin.
+        for (int k = 0; k < 3; k += 2) {
             const float b = P.boundsHalf[k];
             if (pos_[i][k] < -b) {
                 pos_[i][k] = -b;
@@ -390,6 +391,16 @@ void Fluid::step(float dt) {
                 pos_[i][k] = b;
                 if (vel_[i][k] > 0.0f) vel_[i][k] *= -P.restitution;
             }
+        }
+        // y: a fixed floor at the level the checker plane is drawn, so gravity
+        // pools the liquid onto the visible floor; the ceiling still tracks the
+        // frustum so the body stays on screen.
+        if (pos_[i].y < P.floorY) {
+            pos_[i].y = P.floorY;
+            if (vel_[i].y < 0.0f) vel_[i].y *= -P.restitution;
+        } else if (pos_[i].y > P.boundsHalf.y) {
+            pos_[i].y = P.boundsHalf.y;
+            if (vel_[i].y > 0.0f) vel_[i].y *= -P.restitution;
         }
     }
 

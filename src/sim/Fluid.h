@@ -33,6 +33,10 @@ struct FluidParams {
     // is bounded by what you can actually see.
     glm::vec3 boundsHalf{2.6f, 1.6f, 0.7f};
 
+    // Fixed floor level, matching where the checker plane is drawn, so gravity
+    // pools the liquid onto the visible floor instead of an invisible box wall.
+    float floorY = -1.9f;
+
     glm::vec3 gravity = glm::vec3(0.0f);  // world gravity, off by default
 
     // Akinci cohesion, expressed as an acceleration (gamma * m_j * C), so the
