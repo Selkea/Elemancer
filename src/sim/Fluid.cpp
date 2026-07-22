@@ -195,6 +195,16 @@ void Fluid::step(float dt) {
     const float cohesionCoef = 32.0f / (kPi * std::pow(h, 9.0f));
     const float rMin = h * P.antiClumpRadius;
 
+    // Keep the fluid's behaviour independent of the smoothing radius, so a
+    // parameter tuned at one particle scale means the same thing at another.
+    // The SPH pressure acceleration scales as 1/h and the viscosity as 1/h^2;
+    // rescaling by (h/refH) and (h/refH)^2 cancels that, leaving both matched
+    // to the reference scale. Cohesion and the anti-clump floor are already
+    // scale-independent, and density stays near rest regardless of h.
+    constexpr float kRefH = 0.05f;
+    const float pressScale = h / kRefH;
+    const float viscScale = pressScale * pressScale;
+
     buildGrid();
 
     // Bulk position and velocity. Damping against the mean velocity rather
@@ -317,7 +327,8 @@ void Fluid::step(float dt) {
             }
         }
 
-        glm::vec3 a = (fPress + fVisc) / density_[i] + aCohesion + P.gravity;
+        glm::vec3 a =
+            (fPress * pressScale + fVisc * viscScale) / density_[i] + aCohesion + P.gravity;
 
         a += wellAccel(pi, velBulk, posBulk);
 

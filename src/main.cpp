@@ -30,11 +30,11 @@ namespace {
 constexpr int kWidth = 1280;
 constexpr int kHeight = 800;
 
-// dt is bounded by the CFL condition, ~0.4 * h / sqrt(stiffness). At h = 0.05
-// and stiffness 60 that is about 1/390, so 1/480 leaves headroom. Eight
-// substeps then advances 1/60 s of simulation per frame.
-constexpr int kSubSteps = 8;
-constexpr float kDt = 1.0f / 480.0f;
+// dt is bounded by the CFL condition, ~0.4 * h / sqrt(stiffness). The smaller
+// smoothing radius (h = 0.036) tightens that, so dt drops to 1/640; ten
+// substeps then advance ~1/64 s of simulation per frame.
+constexpr int kSubSteps = 10;
+constexpr float kDt = 1.0f / 640.0f;
 
 constexpr float kFovDegrees = 45.0f;
 constexpr float kCamDistance = 5.0f;
@@ -199,7 +199,7 @@ struct KeyEdge {
 int main(int argc, char** argv) {
     bool shotMode = false;
     std::string shotPath = "elemancer_shot.bmp";
-    int particleCount = 4000;
+    int particleCount = 11000;
     int shotFrames = 420;
     float tensionOverride = -1.0f;
     float wellOverride = -1.0f;
@@ -210,6 +210,9 @@ int main(int argc, char** argv) {
     bool noTemporal = false;     // disable temporal surface smoothing, for A/B
     float spinOverride = -1.0f;     // spin rate for the shot
     float clarityOverride = -1.0f;  // absorption for the shot, to match a live look
+    float holdOverride = -1.0f;
+    float viscOverride = -1.0f;
+    float hOverride = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -238,6 +241,12 @@ int main(int argc, char** argv) {
             spinOverride = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--clarity" && i + 1 < argc) {
             clarityOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--hold" && i + 1 < argc) {
+            holdOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--visc" && i + 1 < argc) {
+            viscOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--h" && i + 1 < argc) {
+            hOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -282,10 +291,13 @@ int main(int argc, char** argv) {
     if (clarityOverride >= 0.0f) renderer.settings().absorption = clarityOverride;
 
     elem::Fluid fluid;
+    if (hOverride > 0.0f) fluid.params().h = hOverride;
     fluid.init(particleCount);
     if (tensionOverride > 0.0f) fluid.params().surfaceTension = tensionOverride;
     if (wellOverride > 0.0f) fluid.params().wellStiffness = wellOverride;
     if (spinOverride >= 0.0f) fluid.params().spinRate = spinOverride;
+    if (holdOverride >= 0.0f) fluid.params().wellHoldRadius = holdOverride;
+    if (viscOverride >= 0.0f) fluid.params().viscosity = viscOverride;
     std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
                 fluid.params().surfaceTension, fluid.params().wellStiffness);
 

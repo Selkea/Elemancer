@@ -17,10 +17,9 @@ namespace elem {
 class FluidRenderer {
 public:
     struct Settings {
-        // Must exceed the solver's particle spacing (h * 0.6 = 0.03), or the
-        // spheres never overlap and the surface reads as loose beads. Bigger
-        // also means more overlap, which is a smoother base surface.
-        float radius = 0.052f;        // particle radius, world units
+        // Must exceed the solver's particle spacing (h * 0.6), or the spheres
+        // never overlap and the surface reads as loose beads. ~1.5x spacing.
+        float radius = 0.033f;        // particle radius, world units
         int blurIterations = 4;       // each iteration is one H + one V pass
 
         // The blur smooths the per-particle bumps out of the reconstructed
@@ -56,7 +55,7 @@ public:
         glm::vec3 lightDirWorld{0.45f, 0.75f, 0.50f};
 
         // Diffuse spray, drawn additively over the surface.
-        float sprayRadius = 0.011f;
+        float sprayRadius = 0.008f;
         float sprayIntensity = 0.55f;
         float sprayLifeMax = 1.20f;  // must match DiffuseParams::lifeMax
         glm::vec3 sprayColor{0.86f, 0.94f, 1.0f};
