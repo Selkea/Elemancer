@@ -355,6 +355,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < shotFrames; ++i) {
                 for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
             }
+
             renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
                             projFor(fbw, fbh), fbw, fbh, 6.0f);
             glFinish();
@@ -415,6 +416,20 @@ int main(int argc, char** argv) {
                         " surfaceStddev=%.3f saved=%d\n",
                         shotPath.c_str(), c.y, spin, xhi - xlo, thickness, surfaceStddev,
                         okd ? 1 : 0);
+
+            // Then grab: turn the well on above the pool and confirm it lifts
+            // off the floor (adhesion must not pin it once the cursor pulls).
+            fluid.setAttractor(glm::vec3(0.0f, 0.5f, 0.0f), true);
+            fluid.setWellScale(1.5f);
+            for (int i = 0; i < shotFrames / 2; ++i) {
+                for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            }
+            float grabbedY = 0.0f;
+            for (const glm::vec3& p : fluid.positions()) grabbedY += p.y;
+            grabbedY /= static_cast<float>(fluid.size());
+            std::printf("GRAB pooledY=%.3f -> grabbedY=%.3f (well at 0.5; should rise off floor)\n",
+                        c.y, grabbedY);
+
             renderer.shutdown();
             glfwDestroyWindow(win);
             glfwTerminate();

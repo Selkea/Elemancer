@@ -49,8 +49,9 @@ struct FluidParams {
     // floor when it is within a smoothing radius, so a pool wets the floor and
     // stays a connected puddle (a contact angle) instead of dewetting into a
     // broken, sub-particle-thin film. Balanced against surface tension: more
-    // adhesion spreads/wets, more cohesion beads.
-    float adhesion = 130.0f;
+    // adhesion spreads/wets, more cohesion beads. Only acts while the well is
+    // released, so it never competes with the cursor.
+    float adhesion = 120.0f;
 
     // Hard floor on particle separation.
     //

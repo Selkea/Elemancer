@@ -35,7 +35,7 @@ float phi(float x, float lo, float hi) {
 float adhesionKernel(float r, float h) {
     if (r < 0.5f * h || r > h) return 0.0f;
     const float t = -4.0f * r * r / h + 6.0f * r - 2.0f * h;
-    return std::pow(std::max(t, 0.0f), 0.25f) / std::pow(h, 1.25f);
+    return std::pow(std::max(t, 0.0f), 0.25f);  // peaks ~0.3; scale via adhesion param
 }
 
 // Akinci et al. cohesion spline. It peaks at r = h/2 and returns to zero at
@@ -363,9 +363,12 @@ void Fluid::step(float dt) {
             (fPress * pressScale + fVisc * viscScale) / density_[i] + aCohesion + P.gravity;
 
         // Floor adhesion: pull the particle onto the floor plane when close, so
-        // a pool wets and stays connected. Only bites within a smoothing radius
-        // of the floor, so it does nothing while the body is up at the cursor.
-        if (P.adhesion > 0.0f) {
+        // a released pool wets and stays connected. Suppressed while the well is
+        // actively pulling, so it never fights the cursor -- follow mode holds
+        // the liquid anywhere including near the floor, and grabbing lifts a
+        // pool straight off it. Only bites within a smoothing radius anyway.
+        const bool wellPulling = attractOn_ && wellScale_ > 0.0f;
+        if (P.adhesion > 0.0f && !wellPulling) {
             const float dFloor = pi.y - P.floorY;
             if (dFloor > 0.0f && dFloor < h) {
                 a.y -= P.adhesion * adhesionKernel(dFloor, h);
