@@ -97,6 +97,11 @@ workspace needs the same files at that parent's root.
   Depth is bilaterally smoothed, then temporally smoothed against the previous
   frame (with a disocclusion guard) so the surface does not boil while the body
   moves or rotates.
+- **Surface tension & floor adhesion** — Akinci et al. 2013, "Versatile Surface
+  Tension and Adhesion for SPH Fluids": the cohesion spline holds the body
+  together, and the adhesion kernel pulls a pool onto the floor plane so it wets
+  and stays a connected puddle (a contact angle) rather than dewetting into a
+  thin film. Self-levelling itself is just emergent SPH pressure.
 - **Spray** — Ihmsen et al. 2012, "Unified Spray, Foam and Bubbles for
   Particle-Based Fluids". Diffuse particles are a post-process over the SPH
   state with no forces between them, generated from a trapped-air potential

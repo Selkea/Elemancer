@@ -39,7 +39,7 @@ constexpr float kDt = 1.0f / 640.0f;
 constexpr float kFovDegrees = 45.0f;
 constexpr float kCamDistance = 5.0f;
 constexpr float kDepthHalf = 0.7f;
-constexpr float kGravity = 22.0f;  // downward pull in gravity mode
+constexpr float kGravity = 15.0f;  // downward pull in gravity mode
 
 // Accumulated mouse-wheel movement, drained each frame to dolly the camera.
 // GLFW scroll only arrives through a callback, so it lands here.
@@ -216,6 +216,7 @@ int main(int argc, char** argv) {
     float hOverride = -1.0f;
     float gravityOverride = 0.0f;
     bool dropMode = false;
+    float adhesionOverride = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -254,6 +255,8 @@ int main(int argc, char** argv) {
             gravityOverride = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--drop") {
             dropMode = true;
+        } else if (a == "--adhesion" && i + 1 < argc) {
+            adhesionOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -306,6 +309,7 @@ int main(int argc, char** argv) {
     if (holdOverride >= 0.0f) fluid.params().wellHoldRadius = holdOverride;
     if (viscOverride >= 0.0f) fluid.params().viscosity = viscOverride;
     if (gravityOverride != 0.0f) fluid.params().gravity = glm::vec3(0.0f, -gravityOverride, 0.0f);
+    if (adhesionOverride >= 0.0f) fluid.params().adhesion = adhesionOverride;
     std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
                 fluid.params().surfaceTension, fluid.params().wellStiffness);
 
@@ -345,7 +349,8 @@ int main(int argc, char** argv) {
         // --drop: release the well and let gravity pool the liquid on the floor,
         // which is what pressing G does interactively.
         if (dropMode) {
-            fluid.params().gravity = glm::vec3(0.0f, -kGravity, 0.0f);
+            const float g = gravityOverride != 0.0f ? gravityOverride : kGravity;
+            fluid.params().gravity = glm::vec3(0.0f, -g, 0.0f);
             fluid.setAttractor(wellPos, false);
             for (int i = 0; i < shotFrames; ++i) {
                 for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
@@ -373,9 +378,43 @@ int main(int argc, char** argv) {
                 inertia += glm::dot(r, r);
             }
             const float spin = inertia > 0.0f ? glm::length(angMom / inertia) : 0.0f;
+
+            // Self-levelling check: bin the pooled liquid by x and take the top
+            // surface height per bin. A level puddle has a flat top (low stddev)
+            // and spreads wide and thin; a beaded one mounds up (high stddev).
+            constexpr int kBins = 24;
+            float xlo = 1e9f, xhi = -1e9f;
+            for (const glm::vec3& p : fluid.positions()) {
+                xlo = std::min(xlo, p.x);
+                xhi = std::max(xhi, p.x);
+            }
+            std::vector<float> top(kBins, -1e9f);
+            std::vector<int> cnt(kBins, 0);
+            const float binW = std::max(1e-4f, (xhi - xlo) / kBins);
+            for (const glm::vec3& p : fluid.positions()) {
+                int b = std::min(kBins - 1, static_cast<int>((p.x - xlo) / binW));
+                top[b] = std::max(top[b], p.y);
+                ++cnt[b];
+            }
+            float meanTop = 0.0f;
+            int used = 0;
+            for (int b = 0; b < kBins; ++b)
+                if (cnt[b] > 3) {
+                    meanTop += top[b];
+                    ++used;
+                }
+            meanTop /= std::max(1, used);
+            float var = 0.0f;
+            for (int b = 0; b < kBins; ++b)
+                if (cnt[b] > 3) var += (top[b] - meanTop) * (top[b] - meanTop);
+            const float surfaceStddev = std::sqrt(var / std::max(1, used));
+            const float thickness = meanTop - fluid.params().floorY;
+
             const bool okd = saveBMP(shotPath, fbw, fbh, px);
-            std::printf("DROP file=%s centroid.y=%.3f (floor=%.2f) residualSpin=%.3f saved=%d\n",
-                        shotPath.c_str(), c.y, fluid.params().floorY, spin, okd ? 1 : 0);
+            std::printf("DROP file=%s centroid.y=%.3f residualSpin=%.3f width=%.2f thickness=%.3f"
+                        " surfaceStddev=%.3f saved=%d\n",
+                        shotPath.c_str(), c.y, spin, xhi - xlo, thickness, surfaceStddev,
+                        okd ? 1 : 0);
             renderer.shutdown();
             glfwDestroyWindow(win);
             glfwTerminate();

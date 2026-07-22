@@ -28,6 +28,16 @@ float phi(float x, float lo, float hi) {
     return (std::min(x, hi) - std::min(x, lo)) / (hi - lo);
 }
 
+// Akinci et al. adhesion kernel A(r): non-zero only in the outer half-shell
+// h/2 < r < h and peaking near 0.75h, so it draws a fluid particle onto a
+// boundary it is approaching. Here r is the perpendicular distance to the floor
+// plane, which is a fair approximation of summing over a flat boundary.
+float adhesionKernel(float r, float h) {
+    if (r < 0.5f * h || r > h) return 0.0f;
+    const float t = -4.0f * r * r / h + 6.0f * r - 2.0f * h;
+    return std::pow(std::max(t, 0.0f), 0.25f) / std::pow(h, 1.25f);
+}
+
 // Akinci et al. cohesion spline. It peaks at r = h/2 and returns to zero at
 // both ends, so neighbours pull together without piling onto one another the
 // way a plain attractive force would.
@@ -351,6 +361,16 @@ void Fluid::step(float dt) {
 
         glm::vec3 a =
             (fPress * pressScale + fVisc * viscScale) / density_[i] + aCohesion + P.gravity;
+
+        // Floor adhesion: pull the particle onto the floor plane when close, so
+        // a pool wets and stays connected. Only bites within a smoothing radius
+        // of the floor, so it does nothing while the body is up at the cursor.
+        if (P.adhesion > 0.0f) {
+            const float dFloor = pi.y - P.floorY;
+            if (dFloor > 0.0f && dFloor < h) {
+                a.y -= P.adhesion * adhesionKernel(dFloor, h);
+            }
+        }
 
         a += wellAccel(pi, velBulk, posBulk);
 

@@ -45,6 +45,13 @@ struct FluidParams {
     // spacing^3, so a change of scale quietly destroys surface tension.
     float surfaceTension = 0.45f;
 
+    // Akinci et al. adhesion to the floor plane. Pulls the liquid onto the
+    // floor when it is within a smoothing radius, so a pool wets the floor and
+    // stays a connected puddle (a contact angle) instead of dewetting into a
+    // broken, sub-particle-thin film. Balanced against surface tension: more
+    // adhesion spreads/wets, more cohesion beads.
+    float adhesion = 130.0f;
+
     // Hard floor on particle separation.
     //
     // Both restoring terms vanish as r -> 0: the spiky pressure gradient is
