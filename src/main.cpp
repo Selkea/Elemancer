@@ -213,6 +213,7 @@ int main(int argc, char** argv) {
     float holdOverride = -1.0f;
     float viscOverride = -1.0f;
     float hOverride = -1.0f;
+    float gravityOverride = 0.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -247,6 +248,8 @@ int main(int argc, char** argv) {
             viscOverride = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--h" && i + 1 < argc) {
             hOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--gravity" && i + 1 < argc) {
+            gravityOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -298,6 +301,7 @@ int main(int argc, char** argv) {
     if (spinOverride >= 0.0f) fluid.params().spinRate = spinOverride;
     if (holdOverride >= 0.0f) fluid.params().wellHoldRadius = holdOverride;
     if (viscOverride >= 0.0f) fluid.params().viscosity = viscOverride;
+    if (gravityOverride != 0.0f) fluid.params().gravity = glm::vec3(0.0f, -gravityOverride, 0.0f);
     std::printf("[elemancer] particles=%zu tension=%.3f well=%.1f\n", fluid.size(),
                 fluid.params().surfaceTension, fluid.params().wellStiffness);
 
@@ -531,7 +535,10 @@ int main(int argc, char** argv) {
 
         if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
         if (gravityKey.justPressed(win, GLFW_KEY_G)) {
-            P.gravity = (P.gravity.y < -0.1f) ? glm::vec3(0.0f) : glm::vec3(0.0f, -4.0f, 0.0f);
+            // Strong enough to droop the body clearly below the cursor: the
+            // well is stiff, so a gentle -4 barely sagged it and read as "G
+            // does nothing".
+            P.gravity = (P.gravity.y < -0.1f) ? glm::vec3(0.0f) : glm::vec3(0.0f, -16.0f, 0.0f);
         }
         if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
         if (saveKey.justPressed(win, GLFW_KEY_S)) {
