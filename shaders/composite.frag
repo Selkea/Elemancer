@@ -93,6 +93,13 @@ void main() {
     // Schlick, with R0 = ((n1-n2)/(n1+n2))^2 = 0.02 for an air/water interface.
     float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
+    // Fade the reflection out at the razor-thin rim. The bilateral blur cannot
+    // smooth the outermost silhouette ring (its outer neighbour is background),
+    // so the normal there stays noisy and, since Fresnel makes reflection
+    // dominant at grazing, it streaks the sky. Suppressing reflection where the
+    // film is thinnest lets the smooth refracted body show instead.
+    fresnel *= smoothstep(0.0, 0.10, thickness);
+
     // Refraction: offset the background lookup along the actual refracted
     // ray rather than along the normal, so the bend responds to viewing angle
     // the way water does. Air into water, so eta = 1 / 1.333.
@@ -116,7 +123,7 @@ void main() {
     vec3 refl = reflect(-Vworld, Nworld);
     vec3 t1 = normalize(cross(Nworld, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
     vec3 t2 = cross(Nworld, t1);
-    const float k = 0.035;
+    const float k = 0.06;
     vec3 reflected = (envColor(Pworld, refl) + envColor(Pworld, normalize(refl + k * t1)) +
                       envColor(Pworld, normalize(refl - k * t1)) +
                       envColor(Pworld, normalize(refl + k * t2)) +
@@ -129,11 +136,15 @@ void main() {
     // liquid glows with its own colour instead of showing what is behind it.
     color += uLiquidColor * (1.0 - exp(-thickness * 1.2)) * uScatter;
 
+    // Sun highlight. It is the single biggest source of the "streak" the eye
+    // catches: it lands on the grazing top where the normal is noisiest, and a
+    // sharp exponent shatters it into a striated band. Kept moderately broad,
+    // and faded out at the thin rim where the normal is unreliable, so a clean
+    // highlight only appears on the smooth interior.
     vec3 L = normalize(uLightDirView);
     vec3 H = normalize(L + V);
-    // A softer, wider highlight than a mirror glint: a razor-tight specular
-    // turns every residual normal wrinkle into a separate speckle.
-    color += vec3(1.0, 0.97, 0.92) * pow(max(dot(N, H), 0.0), 90.0) * 0.7;
+    float spec = pow(max(dot(N, H), 0.0), 22.0) * smoothstep(0.0, 0.10, thickness);
+    color += vec3(1.0, 0.97, 0.92) * spec * 0.5;
 
     // Fade the razor-thin rim into the background. The reconstructed normal is
     // unreliable at the silhouette (its outward neighbour is background), so it

@@ -21,7 +21,7 @@ public:
         // spheres never overlap and the surface reads as loose beads. Bigger
         // also means more overlap, which is a smoother base surface.
         float radius = 0.052f;        // particle radius, world units
-        int blurIterations = 5;       // each iteration is one H + one V pass
+        int blurIterations = 4;       // each iteration is one H + one V pass
 
         // The blur smooths the per-particle bumps out of the reconstructed
         // normals. Too narrow and the surface stays lumpy (and boils under

@@ -425,7 +425,7 @@ void FluidRenderer::shutdown() {
     if (vaoSpray_) glDeleteVertexArrays(1, &vaoSpray_);
     if (vaoQuad_) glDeleteVertexArrays(1, &vaoQuad_);
 
-    const GLuint progs[] = {progBackground_, progDepth_,     progThickness_, progBlur_,
+    const GLuint progs[] = {progBackground_, progDepth_, progThickness_, progBlur_,
                             progComposite_,  progSpray_, progTemporal_};
     for (GLuint p : progs) {
         if (p) glDeleteProgram(p);

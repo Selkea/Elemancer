@@ -208,7 +208,8 @@ int main(int argc, char** argv) {
     float distOverride = -1.0f;  // camera distance for the shot; scroll does this live
     bool measureJitter = false;  // report frame-to-frame pixel diff of a moving body
     bool noTemporal = false;     // disable temporal surface smoothing, for A/B
-    float spinOverride = -1.0f;  // spin rate for the shot
+    float spinOverride = -1.0f;     // spin rate for the shot
+    float clarityOverride = -1.0f;  // absorption for the shot, to match a live look
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -235,6 +236,8 @@ int main(int argc, char** argv) {
             noTemporal = true;
         } else if (a == "--spin" && i + 1 < argc) {
             spinOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--clarity" && i + 1 < argc) {
+            clarityOverride = static_cast<float>(std::atof(argv[++i]));
         }
     }
 
@@ -276,6 +279,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (noTemporal) renderer.settings().temporalBlend = 0.0f;
+    if (clarityOverride >= 0.0f) renderer.settings().absorption = clarityOverride;
 
     elem::Fluid fluid;
     fluid.init(particleCount);
