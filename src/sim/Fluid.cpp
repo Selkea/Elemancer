@@ -84,29 +84,16 @@ void Fluid::init(int count, std::uint32_t seed) {
     sprayVel_.clear();
     sprayLife_.clear();
 
-    rebuildGrid();
+    buildGrid();
 }
 
 void Fluid::setBounds(const glm::vec3& half) {
-    const glm::vec3 clamped = glm::max(half, glm::vec3(params_.h * 2.0f));
-    if (clamped == params_.boundsHalf && !cellHead_.empty()) return;
-    params_.boundsHalf = clamped;
-    rebuildGrid();
+    // Bounds are only the walls the fluid is clamped against; the neighbour grid
+    // is sized to the particles instead (see buildGrid), so a large, zoomed-out
+    // domain costs nothing here.
+    params_.boundsHalf = glm::max(half, glm::vec3(params_.h * 2.0f));
 }
 
-void Fluid::rebuildGrid() {
-    cellSize_ = params_.h;
-    const float pad = params_.h * 2.0f;
-
-    gridMin_ = -(params_.boundsHalf + pad);
-    const glm::vec3 extent = 2.0f * (params_.boundsHalf + pad);
-
-    gridDim_ = glm::ivec3(std::max(1, static_cast<int>(std::ceil(extent.x / cellSize_))),
-                          std::max(1, static_cast<int>(std::ceil(extent.y / cellSize_))),
-                          std::max(1, static_cast<int>(std::ceil(extent.z / cellSize_))));
-
-    cellHead_.assign(static_cast<std::size_t>(gridDim_.x) * gridDim_.y * gridDim_.z, -1);
-}
 
 void Fluid::setAttractor(const glm::vec3& p, bool enabled) {
     attractor_ = p;
@@ -172,8 +159,43 @@ glm::vec3 Fluid::wellAccel(const glm::vec3& p, const glm::vec3& velBulk,
 }
 
 void Fluid::buildGrid() {
-    std::fill(cellHead_.begin(), cellHead_.end(), -1);
-    for (int i = 0; i < static_cast<int>(pos_.size()); ++i) {
+    const int n = static_cast<int>(pos_.size());
+    if (n == 0) {
+        gridDim_ = glm::ivec3(1);
+        cellHead_.assign(1, -1);
+        return;
+    }
+
+    // Size the grid to the particles' bounding box, not the domain. The domain
+    // grows when the camera zooms out (so the walls stay off screen), but the
+    // fluid still occupies a small region -- sizing the grid to it keeps the
+    // cell count, and the per-step clear, independent of zoom.
+    glm::vec3 lo = pos_[0];
+    glm::vec3 hi = pos_[0];
+    for (int i = 1; i < n; ++i) {
+        lo = glm::min(lo, pos_[i]);
+        hi = glm::max(hi, pos_[i]);
+    }
+
+    // Cell size is normally the smoothing radius, but if the fluid is flung far
+    // apart the grid is coarsened to stay under a cell cap rather than
+    // allocating millions of cells. A larger cell only means more candidates
+    // per neighbour test, never a missed neighbour, since it still exceeds h.
+    constexpr int kMaxDim = 128;
+    const glm::vec3 span = hi - lo;
+    const float maxSpan = std::max(span.x, std::max(span.y, span.z));
+    cellSize_ = std::max(params_.h, maxSpan / static_cast<float>(kMaxDim));
+
+    const float margin = cellSize_;
+    gridMin_ = lo - margin;
+    const glm::vec3 extent = span + 2.0f * margin;
+    gridDim_ = glm::ivec3(
+        std::min(kMaxDim + 2, std::max(1, static_cast<int>(std::ceil(extent.x / cellSize_)))),
+        std::min(kMaxDim + 2, std::max(1, static_cast<int>(std::ceil(extent.y / cellSize_)))),
+        std::min(kMaxDim + 2, std::max(1, static_cast<int>(std::ceil(extent.z / cellSize_)))));
+
+    cellHead_.assign(static_cast<std::size_t>(gridDim_.x) * gridDim_.y * gridDim_.z, -1);
+    for (int i = 0; i < n; ++i) {
         const int c = cellIndex(pos_[i]);
         nextInCell_[i] = cellHead_[c];
         cellHead_[c] = i;

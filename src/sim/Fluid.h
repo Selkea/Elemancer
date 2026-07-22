@@ -186,7 +186,6 @@ public:
     std::size_t sprayCount() const { return sprayPos_.size(); }
 
 private:
-    void rebuildGrid();
     void buildGrid();
     int cellIndex(const glm::vec3& p) const;
     int countNeighbours(const glm::vec3& p) const;
