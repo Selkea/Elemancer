@@ -12,7 +12,7 @@ namespace elem {
 // Tunables for the SPH solver. Defaults are aimed at droplet-scale liquid
 // gathering around a cursor gravity well.
 struct FluidParams {
-    float h           = 0.036f;   // smoothing radius; particle spacing is h * 0.6
+    float h           = 0.044f;   // smoothing radius; particle spacing is h * 0.6
     float restDensity = 1000.0f;
 
     // Stiffness sets the speed of sound, which sets the CFL limit on dt.
@@ -132,10 +132,10 @@ struct DiffuseParams {
     // Kinetic energy gates the whole thing, so spray appears when the liquid
     // is actually being thrown around and not while it sits on the cursor.
     // Gated by kinetic energy 0.5 m v^2. Mass scales with spacing^3, so these
-    // must track the particle scale: at h=0.036 the mass is ~0.010. Kept low so
+    // must track the particle scale: at h=0.044 the mass is ~0.018. Kept low so
     // spray starts around a gentle v=2.5 rather than a hard flick.
-    float kineticMin = 0.03f;
-    float kineticMax = 1.0f;
+    float kineticMin = 0.055f;
+    float kineticMax = 1.8f;
 
     // Measured: at the tear (~speed 8) trapped air peaks near 87 and Ek near
     // 3.5, but that is a brief instant over few particles, so the rate has to

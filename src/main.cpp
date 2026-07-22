@@ -30,9 +30,9 @@ namespace {
 constexpr int kWidth = 1280;
 constexpr int kHeight = 800;
 
-// dt is bounded by the CFL condition, ~0.4 * h / sqrt(stiffness). The smaller
-// smoothing radius (h = 0.036) tightens that, so dt drops to 1/640; ten
-// substeps then advance ~1/64 s of simulation per frame.
+// dt is bounded by the CFL condition, ~0.4 * h / sqrt(stiffness). At h = 0.044
+// this leaves headroom; 1/640 over ten substeps advances ~1/64 s of simulation
+// per frame and keeps the same feel as the finer scale.
 constexpr int kSubSteps = 10;
 constexpr float kDt = 1.0f / 640.0f;
 
@@ -199,7 +199,7 @@ struct KeyEdge {
 int main(int argc, char** argv) {
     bool shotMode = false;
     std::string shotPath = "elemancer_shot.bmp";
-    int particleCount = 11000;
+    int particleCount = 6000;
     int shotFrames = 420;
     float tensionOverride = -1.0f;
     float wellOverride = -1.0f;
