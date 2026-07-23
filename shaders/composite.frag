@@ -53,12 +53,15 @@ void main() {
     // One-sided differences, keeping whichever neighbour is nearer in depth.
     // A neighbour that landed on the background must be rejected outright:
     // differencing against 1e6 produces a garbage normal, which is what shows
-    // up as black speckle along the silhouette. The derivative baseline is a
-    // few texels wide, not one: a longer finite difference is far less
-    // sensitive to per-pixel depth noise, which is what streaks the reflection
-    // at the grazing rim where the surface is nearly tangent to view.
-    vec2 sx = vec2(uTexel.x * 3.0, 0.0);
-    vec2 sy = vec2(0.0, uTexel.y * 3.0);
+    // up as black speckle along the silhouette. The derivative baseline is wide
+    // (eight texels), not one: a longer finite difference is far less sensitive
+    // to per-pixel depth noise. That noise is what streaks the grazing crown,
+    // where the surface turns nearly tangent to view -- there the noisy normal
+    // flickers the Fresnel reflect/refract blend from pixel to pixel, shattering
+    // the bright rim into vertical bright/dark slivers. Widening the baseline
+    // from three to eight texels quiets that flicker at the source.
+    vec2 sx = vec2(uTexel.x * 8.0, 0.0);
+    vec2 sy = vec2(0.0, uTexel.y * 8.0);
 
     float dR = texture(uDepth, vUV + sx).r;
     float dL = texture(uDepth, vUV - sx).r;
@@ -90,8 +93,15 @@ void main() {
     float thickness = texture(uThickness, vUV).r;
     vec3 V = normalize(-P);
 
+    // How grazing the view is: 0 head-on, 1 where the surface turns edge-on to
+    // the camera. This is exactly where the depth-reconstructed normal is
+    // noisiest, so it drives how much the reflection and highlight are softened
+    // below, to stop that noise shattering the bright rim into slivers.
+    float NdotV = max(dot(N, V), 0.0);
+    float graze = 1.0 - NdotV;
+
     // Schlick, with R0 = ((n1-n2)/(n1+n2))^2 = 0.02 for an air/water interface.
-    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    float fresnel = 0.02 + 0.98 * pow(graze, 5.0);
 
     // Fade the reflection out at the razor-thin rim. The bilateral blur cannot
     // smooth the outermost silhouette ring (its outer neighbour is background),
@@ -115,20 +125,33 @@ void main() {
     vec3 Nworld = normalize((uInvView * vec4(N, 0.0)).xyz);
     vec3 Vworld = normalize((uInvView * vec4(V, 0.0)).xyz);
 
-    // Glossy reflection: average the environment over a small cone rather than
-    // taking a single mirror sample. At the grazing rim the reflected ray
-    // sweeps fast across the bright sky, so a mirror sample turns any residual
-    // normal wrinkle into a streak; spreading the taps smooths that out and
+    // Glossy reflection: average the environment over a cone rather than taking
+    // a single mirror sample. At the grazing rim the reflected ray sweeps fast
+    // across the bright sky, so a mirror sample turns any residual normal
+    // wrinkle into a bright/dark sliver; spreading the taps smooths that out and
     // reads more like water than chrome.
+    //
+    // The cone widens with the grazing angle (quadratically, so the interior
+    // stays crisp), because the rim is where the reconstructed normal is
+    // noisiest and Fresnel makes the reflection dominant there. Widening it
+    // blurs the sky reflection so the rim reads as one smooth bright band rather
+    // than a striated one. Nine taps -- centre, four axial, four diagonal -- so
+    // that a wide cone does not itself alias into a visible cross.
     vec3 refl = reflect(-Vworld, Nworld);
     vec3 t1 = normalize(cross(Nworld, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
     vec3 t2 = cross(Nworld, t1);
-    const float k = 0.06;
-    vec3 reflected = (envColor(Pworld, refl) + envColor(Pworld, normalize(refl + k * t1)) +
+    float k = 0.05 + 0.5 * graze * graze;
+    float kd = 0.7 * k;  // diagonal ring, pulled in so the cone stays round
+    vec3 reflected = (envColor(Pworld, refl) +
+                      envColor(Pworld, normalize(refl + k * t1)) +
                       envColor(Pworld, normalize(refl - k * t1)) +
                       envColor(Pworld, normalize(refl + k * t2)) +
-                      envColor(Pworld, normalize(refl - k * t2))) *
-                     0.2;
+                      envColor(Pworld, normalize(refl - k * t2)) +
+                      envColor(Pworld, normalize(refl + kd * (t1 + t2))) +
+                      envColor(Pworld, normalize(refl - kd * (t1 + t2))) +
+                      envColor(Pworld, normalize(refl + kd * (t1 - t2))) +
+                      envColor(Pworld, normalize(refl - kd * (t1 - t2)))) *
+                     (1.0 / 9.0);
 
     vec3 color = mix(refracted, reflected, fresnel);
 
@@ -139,11 +162,13 @@ void main() {
     // Sun highlight. It is the single biggest source of the "streak" the eye
     // catches: it lands on the grazing top where the normal is noisiest, and a
     // sharp exponent shatters it into a striated band. Kept moderately broad,
-    // and faded out at the thin rim where the normal is unreliable, so a clean
-    // highlight only appears on the smooth interior.
+    // faded out at the thin rim, and also faded toward the grazing rim (by
+    // NdotV) where the normal is unreliable, so a clean highlight only appears
+    // on the smooth, camera-facing interior.
     vec3 L = normalize(uLightDirView);
     vec3 H = normalize(L + V);
-    float spec = pow(max(dot(N, H), 0.0), 22.0) * smoothstep(0.0, 0.10, thickness);
+    float spec =
+        pow(max(dot(N, H), 0.0), 22.0) * smoothstep(0.0, 0.10, thickness) * NdotV;
     color += vec3(1.0, 0.97, 0.92) * spec * 0.5;
 
     // Fade the razor-thin rim into the background. The reconstructed normal is
