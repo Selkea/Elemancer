@@ -25,7 +25,41 @@
 #include "render/Hud.h"
 #include "sim/Fluid.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace {
+
+// Directory of the running executable, so a shared build can find its shaders
+// next to itself rather than at the compile-time source path.
+std::string exeDir() {
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    std::string p(buf, n);
+    const auto slash = p.find_last_of("\\/");
+    return slash == std::string::npos ? std::string() : p.substr(0, slash);
+#else
+    return {};
+#endif
+}
+
+// Prefer a shaders/ folder sitting beside the executable (a packaged, portable
+// build); fall back to the compiled-in source path for running in place during
+// development. Shaders and the settings file are both taken from here.
+std::string resolveAssetDir() {
+    const std::string dir = exeDir();
+    if (!dir.empty()) {
+        std::ifstream probe(dir + "/shaders/common_env.glsl");
+        if (probe.good()) return dir;
+    }
+    return ELEMANCER_ASSET_DIR;
+}
+
 
 constexpr int kWidth = 1280;
 constexpr int kHeight = 800;
@@ -292,8 +326,10 @@ int main(int argc, char** argv) {
                 reinterpret_cast<const char*>(glGetString(GL_VERSION)),
                 reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
 
+    const std::string assetDir = resolveAssetDir();
+
     elem::FluidRenderer renderer;
-    if (!renderer.init(ELEMANCER_ASSET_DIR)) {
+    if (!renderer.init(assetDir)) {
         std::fprintf(stderr, "[elemancer] renderer init failed\n");
         return 1;
     }
@@ -563,7 +599,7 @@ int main(int argc, char** argv) {
     }
 
     // Restore any values tuned in a previous session, then keep them saved.
-    const std::string cfgPath = std::string(ELEMANCER_ASSET_DIR) + "/elemancer.cfg";
+    const std::string cfgPath = assetDir + "/elemancer.cfg";
     if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption)) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }

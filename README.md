@@ -77,6 +77,16 @@ The domain tracks the window: its half-extents are the view frustum measured at
 the near face of the tank, so the liquid is walled in by exactly what is on
 screen, at any window size.
 
+## Sharing a build
+
+`./package.sh` (from an MSYS2 UCRT64 shell) produces `dist/Elemancer-win64.zip`:
+the executable, its `shaders/`, and the MSYS2 runtime DLLs it links
+(`glfw3`, `glew32`, `libstdc++-6`, `libgcc_s_seh-1`, `libgomp-1`,
+`libwinpthread-1`). The recipient does not need MSYS2 — they unzip and run
+`elemancer.exe`. The exe finds its shaders next to itself, so the folder is
+relocatable; delete `elemancer.cfg` before zipping to ship the compiled default
+tuning rather than yours.
+
 ## Running from VS Code
 
 `Ctrl+Shift+B` builds. `F5` builds and launches under gdb. Other targets are
