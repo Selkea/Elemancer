@@ -37,9 +37,10 @@ cmake --build build
 ./build/elemancer --shot out.bmp --sweepspeed 0 --jitter --notemporal
 ```
 
-Rest-packed `meanRadius` is 0.216, so a whip that leaves it at 0.216 with 0%
-strays did not deform the body at all. As of now it stays intact through a
-peak cursor speed of 5, begins to shed at 6, and tears properly at 8.
+Rest-packed `meanRadius` is 0.218, so a whip that leaves it at 0.218 with 0%
+strays did not deform the body at all. As of now it stays intact and rest-tight
+through a peak cursor speed of ~8; beyond that the tail trails and stretches
+(the well lag grows) rather than the body ballooning out into a pancake.
 
 | Input | Effect |
 | --- | --- |

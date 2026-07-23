@@ -104,9 +104,18 @@ struct FluidParams {
     // liquid translates as a rigid ball that never deforms, for the same
     // reason a drop falling under gravity does not deform. Bulk is here only
     // to guarantee the body keeps up; local is what makes it slosh and tear.
+    //
+    // The hold radius must comfortably exceed the body's own radius plus its
+    // lag, or a fast whip drives part of the body past it into the 1/r^2 rolloff
+    // where the pull weakens differentially and the body balloons out (a flat
+    // pancake in the spin plane) instead of tracking as one. At 1.1 a peak
+    // cursor speed of 8 resonated the spring and expanded the body ~60% over
+    // rest packing; at 1.6 the whole body stays inside the linear-spring zone
+    // through that speed and holds rest-tight, and only genuinely extreme flicks
+    // (speed >~10) let the tail trail out. Do not lower this back toward 1.
     float wellStiffness = 22.0f;   // bulk, on the centroid
     float wellLocal = 34.0f;       // per-particle
-    float wellHoldRadius = 1.1f;
+    float wellHoldRadius = 1.6f;
     float wellMaxAccel = 400.0f;   // safety clamp only; should not shape behaviour
 
     // Damps the body's bulk drift so it settles onto the cursor instead of
