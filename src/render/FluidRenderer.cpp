@@ -260,6 +260,18 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     const float pointScale = static_cast<float>(fbHeight) * proj[1][1];
     const glm::vec3 lightDirView(view * glm::vec4(settings_.lightDirWorld, 0.0f));
 
+    // The depth blur and normal reconstruction are sized in screen texels, but
+    // the body shrinks on screen as the camera dollies out. Left fixed, those
+    // kernels come to span a large fraction of a distant body: the blur flattens
+    // it and the normal baseline goes flat across the crown, so the grazing rim
+    // collapses into a hard bright cap -- slivers, from the wrong scale. Scale
+    // the kernels with the projected particle size (~ 1 / distance), anchored so
+    // the near design view (distance ~5) is unchanged. Clamped so a very close or
+    // very far body cannot drive the kernels to a degenerate size.
+    const float camDist = glm::length(glm::vec3(invView[3]));
+    constexpr float kRefDist = 5.0f;
+    const float kernelScale = glm::clamp(kRefDist / glm::max(camDist, 0.5f), 0.35f, 1.5f);
+
     glViewport(0, 0, fbWidth, fbHeight);
 
     // 1. Environment behind the fluid, so refraction has something to bend.
@@ -290,8 +302,8 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     // 3. Bilateral smoothing, ping-ponging horizontal then vertical.
     glDisable(GL_DEPTH_TEST);
     glUseProgram(progBlur_);
-    setFloat(progBlur_, "uRadius", settings_.blurRadius);
-    setFloat(progBlur_, "uSigmaSpatial", settings_.sigmaSpatial);
+    setFloat(progBlur_, "uRadius", settings_.blurRadius * kernelScale);
+    setFloat(progBlur_, "uSigmaSpatial", settings_.sigmaSpatial * kernelScale);
     setFloat(progBlur_, "uSigmaDepth", settings_.sigmaDepth);
     setInt(progBlur_, "uDepth", 0);
     glActiveTexture(GL_TEXTURE0);
@@ -368,6 +380,7 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     setMat4(progComposite_, "uInvProj", invProj);
     setMat4(progComposite_, "uInvView", invView);
     setVec2(progComposite_, "uTexel", glm::vec2(texelX, texelY));
+    setFloat(progComposite_, "uNormalBaseline", 8.0f * kernelScale);
     setVec3(progComposite_, "uLightDirView", glm::vec3(lightDirView));
     setVec3(progComposite_, "uLightDirWorld", settings_.lightDirWorld);
     setFloat(progComposite_, "uTime", timeSeconds);

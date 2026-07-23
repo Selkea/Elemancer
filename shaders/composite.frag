@@ -12,6 +12,7 @@ uniform sampler2D uScene;      // environment already rendered behind the fluid
 uniform mat4 uInvProj;
 uniform mat4 uInvView;
 uniform vec2 uTexel;
+uniform float uNormalBaseline;  // finite-difference span in texels, scaled with distance
 uniform vec3 uLightDirView;
 uniform vec3 uLiquidColor;
 uniform float uRefractScale;
@@ -54,14 +55,21 @@ void main() {
     // A neighbour that landed on the background must be rejected outright:
     // differencing against 1e6 produces a garbage normal, which is what shows
     // up as black speckle along the silhouette. The derivative baseline is wide
-    // (eight texels), not one: a longer finite difference is far less sensitive
-    // to per-pixel depth noise. That noise is what streaks the grazing crown,
-    // where the surface turns nearly tangent to view -- there the noisy normal
-    // flickers the Fresnel reflect/refract blend from pixel to pixel, shattering
-    // the bright rim into vertical bright/dark slivers. Widening the baseline
-    // from three to eight texels quiets that flicker at the source.
-    vec2 sx = vec2(uTexel.x * 8.0, 0.0);
-    vec2 sy = vec2(0.0, uTexel.y * 8.0);
+    // (eight texels at the near view), not one: a longer finite difference is far
+    // less sensitive to per-pixel depth noise. That noise is what streaks the
+    // grazing crown, where the surface turns nearly tangent to view -- there the
+    // noisy normal flickers the Fresnel reflect/refract blend from pixel to pixel,
+    // shattering the bright rim into vertical bright/dark slivers. Widening the
+    // baseline quiets that flicker at the source.
+    //
+    // The baseline is in texels but the body shrinks on screen with distance, so
+    // uNormalBaseline scales it down as the body recedes (set on the CPU from the
+    // projected particle size). Fixed at eight, a distant body only a few dozen
+    // pixels across would have the baseline span half of it -- the normal goes
+    // flat and the grazing crown reads as one hard bright cap: slivers again,
+    // from the wrong scale.
+    vec2 sx = vec2(uTexel.x * uNormalBaseline, 0.0);
+    vec2 sy = vec2(0.0, uTexel.y * uNormalBaseline);
 
     float dR = texture(uDepth, vUV + sx).r;
     float dL = texture(uDepth, vUV - sx).r;
