@@ -73,18 +73,42 @@ void main() {
     bool okU = dU < kBackground * 0.5;
     bool okD = dD < kBackground * 0.5;
 
+    // On a continuous surface use a central difference (the average of the two
+    // one-sided ones): it is smooth, so it does not leave a seam. Picking the
+    // nearer one-sided difference instead flips discontinuously along the line
+    // through the body's nearest point -- a vertical seam from the x pick, a
+    // horizontal one from the y pick -- because the forward and backward
+    // differences disagree slightly through the curvature. Reserve the nearer
+    // one-sided pick for a genuine depth step (a foreground blob's silhouette,
+    // or two surfaces overlapping), where a central difference would wrongly
+    // span both surfaces. kStep is the view-z jump that means "different
+    // surface" rather than ordinary curvature over the finite-difference span.
+    const float kStep = 0.15;
+
     vec3 right = viewPosFromDepth(vUV + sx, dR) - P;
     vec3 left = P - viewPosFromDepth(vUV - sx, dL);
+    bool contR = abs(right.z) < kStep;
+    bool contL = abs(left.z) < kStep;
     vec3 ddx = vec3(sx.x, 0.0, 0.0);
-    if (okR && okL) ddx = abs(left.z) < abs(right.z) ? left : right;
-    else if (okR) ddx = right;
+    if (okR && okL) {
+        if (contR && contL) ddx = 0.5 * (right + left);
+        else if (contR) ddx = right;
+        else if (contL) ddx = left;
+        else ddx = abs(left.z) < abs(right.z) ? left : right;
+    } else if (okR) ddx = right;
     else if (okL) ddx = left;
 
     vec3 up = viewPosFromDepth(vUV + sy, dU) - P;
     vec3 down = P - viewPosFromDepth(vUV - sy, dD);
+    bool contU = abs(up.z) < kStep;
+    bool contD = abs(down.z) < kStep;
     vec3 ddy = vec3(0.0, sy.y, 0.0);
-    if (okU && okD) ddy = abs(down.z) < abs(up.z) ? down : up;
-    else if (okU) ddy = up;
+    if (okU && okD) {
+        if (contU && contD) ddy = 0.5 * (up + down);
+        else if (contU) ddy = up;
+        else if (contD) ddy = down;
+        else ddy = abs(down.z) < abs(up.z) ? down : up;
+    } else if (okU) ddy = up;
     else if (okD) ddy = down;
 
     vec3 N = normalize(cross(ddx, ddy));
