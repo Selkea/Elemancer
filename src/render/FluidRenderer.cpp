@@ -12,6 +12,14 @@ namespace {
 
 constexpr float kBackgroundDepth = 1.0e6f;
 
+// Supersample factor for the shading pass. The depth, blur and thickness passes
+// stay at window resolution (their smoothing is already tuned there); only the
+// composite and spray are drawn at kSuperSample x and box-downsampled, which is
+// where the aliasing that reads as slivers/specks lives -- the razor highlight,
+// the grazing reflection and the silhouette edge. 2x quarters an isolated hot
+// pixel by averaging it with three subpixels; 4x the shading cost, cheap here.
+constexpr int kSuperSample = 2;
+
 std::string readFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) {
@@ -178,12 +186,12 @@ bool FluidRenderer::buildPrograms() {
 
 void FluidRenderer::releaseTargets() {
     const GLuint fbos[] = {fboScene_,   fboDepth_,   fboThickness_, fboBlur_[0],
-                           fboBlur_[1], fboHist_[0], fboHist_[1]};
+                           fboBlur_[1], fboHist_[0], fboHist_[1], fboColor_};
     for (GLuint f : fbos) {
         if (f) glDeleteFramebuffers(1, &f);
     }
     const GLuint texs[] = {texScene_,   texDepth_,   texThickness_, texBlur_[0],
-                           texBlur_[1], texHist_[0], texHist_[1]};
+                           texBlur_[1], texHist_[0], texHist_[1], texColor_};
     for (GLuint t : texs) {
         if (t) glDeleteTextures(1, &t);
     }
@@ -192,6 +200,7 @@ void FluidRenderer::releaseTargets() {
     fboScene_ = fboDepth_ = fboThickness_ = fboBlur_[0] = fboBlur_[1] = 0;
     texScene_ = texDepth_ = texThickness_ = texBlur_[0] = texBlur_[1] = 0;
     fboHist_[0] = fboHist_[1] = texHist_[0] = texHist_[1] = 0;
+    fboColor_ = texColor_ = 0;
     rboDepth_ = 0;
 }
 
@@ -213,6 +222,9 @@ void FluidRenderer::ensureTargets(int w, int h) {
     texHist_[0] = makeColorTexture(w, h, GL_R32F);
     texHist_[1] = makeColorTexture(w, h, GL_R32F);
 
+    // Shading target at the supersampled resolution; everything else is 1x.
+    texColor_ = makeRgbaTexture(w * kSuperSample, h * kSuperSample);
+
     fboScene_ = makeFbo(texScene_, 0);
     fboDepth_ = makeFbo(texDepth_, rboDepth_);
     fboThickness_ = makeFbo(texThickness_, 0);
@@ -220,6 +232,7 @@ void FluidRenderer::ensureTargets(int w, int h) {
     fboBlur_[1] = makeFbo(texBlur_[1], 0);
     fboHist_[0] = makeFbo(texHist_[0], 0);
     fboHist_[1] = makeFbo(texHist_[1], 0);
+    fboColor_ = makeFbo(texColor_, 0);
 
     // Seed the history as empty (background) so the first frame is all "current".
     const float bg[4] = {kBackgroundDepth, 0.0f, 0.0f, 0.0f};
@@ -364,9 +377,15 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     glDrawArrays(GL_POINTS, 0, count);
     glDisable(GL_BLEND);
 
-    // 5. Shade the surface into the default framebuffer.
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, fbWidth, fbHeight);
+    // 5. Shade the surface into the supersampled colour target. Evaluating the
+    // highlight, reflection and silhouette edge at kSuperSample x resolution and
+    // box-downsampling (step 7) is what antialiases the specks/slivers that a
+    // small or moving body otherwise crawls with. The depth it reads is still 1x
+    // (sampled bilinearly), so no per-pass tuning changes.
+    const int ssW = fbWidth * kSuperSample;
+    const int ssH = fbHeight * kSuperSample;
+    glBindFramebuffer(GL_FRAMEBUFFER, fboColor_);
+    glViewport(0, 0, ssW, ssH);
     glUseProgram(progComposite_);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, source);
@@ -390,9 +409,10 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     setFloat(progComposite_, "uScatter", settings_.scatter);
     drawQuad();
 
-    // 6. Diffuse spray, additively over the shaded surface. Deliberately not
-    // depth tested: the droplets are sub-pixel scale and reading them as a
-    // haze over the body looks better than popping them against its silhouette.
+    // 6. Diffuse spray, additively over the shaded surface (still in the
+    // supersampled target, so the droplets downsample with everything else).
+    // Deliberately not depth tested: the droplets are sub-pixel scale and
+    // reading them as a haze over the body looks better than popping them.
     if (!sprayPositions.empty() && progSpray_ != 0) {
         sprayScratch_.resize(sprayPositions.size());
         for (std::size_t i = 0; i < sprayPositions.size(); ++i) {
@@ -416,7 +436,7 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
         glUseProgram(progSpray_);
         setMat4(progSpray_, "uView", view);
         setMat4(progSpray_, "uProj", proj);
-        setFloat(progSpray_, "uPointScale", pointScale);
+        setFloat(progSpray_, "uPointScale", pointScale * static_cast<float>(kSuperSample));
         setFloat(progSpray_, "uRadius", settings_.sprayRadius);
         setFloat(progSpray_, "uLifeMax", settings_.sprayLifeMax);
         setFloat(progSpray_, "uIntensity", settings_.sprayIntensity);
@@ -426,6 +446,15 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
         glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(sprayScratch_.size()));
         glDisable(GL_BLEND);
     }
+
+    // 7. Downsample the supersampled shading to the window. A linear blit from
+    // the kSuperSample x target to the default framebuffer box-filters each
+    // window pixel from its subpixels, which is the antialiasing.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fboColor_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, ssW, ssH, 0, 0, fbWidth, fbHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, fbWidth, fbHeight);  // restore for whatever draws next (HUD)
 
     glActiveTexture(GL_TEXTURE0);
 }

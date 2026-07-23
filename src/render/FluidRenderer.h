@@ -102,6 +102,12 @@ private:
     GLuint texBlur_[2] = {0, 0};
     GLuint rboDepth_ = 0;
 
+    // Supersampled colour target: the composite (surface shading) and spray are
+    // drawn at a higher internal resolution here, then box-downsampled to the
+    // window, so the highlight, reflection and silhouette edge stop aliasing
+    // into crawling specks when the body is small on screen or moving.
+    GLuint fboColor_ = 0, texColor_ = 0;
+
     // History for temporal surface smoothing, ping-ponged each frame.
     GLuint fboHist_[2] = {0, 0};
     GLuint texHist_[2] = {0, 0};
