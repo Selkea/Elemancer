@@ -20,7 +20,14 @@ public:
         // Must exceed the solver's particle spacing (h * 0.6), or the spheres
         // never overlap and the surface reads as loose beads. ~1.5x spacing.
         float radius = 0.040f;        // particle radius, world units
-        int blurIterations = 4;       // each iteration is one H + one V pass
+        // Each iteration is one H + one V pass. Seven, not four: the sharp sun
+        // specular (pow(dot(N,H), 22)) exposes shallow creases the bilateral blur
+        // leaves between particle clusters as dull pinholes in the highlight, and
+        // no exponent hides them because the surface genuinely dips there. The
+        // depth sigma is kept tight (so the blur can't cross the silhouette), so
+        // extra iterations -- not a wider sigma -- are how the interior is smoothed
+        // enough to erase those creases. Cheap on any modern GPU.
+        int blurIterations = 7;
 
         // The blur smooths the per-particle bumps out of the reconstructed
         // normals. Too narrow and the surface stays lumpy (and boils under
