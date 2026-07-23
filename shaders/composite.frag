@@ -132,6 +132,16 @@ void main() {
     float NdotV = max(dot(N, V), 0.0);
     float graze = 1.0 - NdotV;
 
+    // How far zoomed out. uNormalBaseline is 8 * kernelScale and kernelScale ~
+    // 5/distance, so this is ~ distance/5 - 1: zero at the near design view,
+    // growing as the body recedes. When the body is only a few dozen pixels
+    // across its depth carries just a few pixels per particle, so the normal is
+    // necessarily reconstructed at a fine, noisy scale; a razor specular and a
+    // mirror-sharp grazing reflection then spike isolated rim pixels to white --
+    // thin bright slivers on a distant bead. Soften both as it recedes: a small
+    // far droplet reads fine as a soft smooth bead, and the spikes go away.
+    float zoomRough = clamp(8.0 / uNormalBaseline - 1.0, 0.0, 2.0);
+
     // Schlick, with R0 = ((n1-n2)/(n1+n2))^2 = 0.02 for an air/water interface.
     float fresnel = 0.02 + 0.98 * pow(graze, 5.0);
 
@@ -172,7 +182,7 @@ void main() {
     vec3 refl = reflect(-Vworld, Nworld);
     vec3 t1 = normalize(cross(Nworld, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
     vec3 t2 = cross(Nworld, t1);
-    float k = 0.05 + 0.5 * graze * graze;
+    float k = 0.05 + 0.5 * graze * graze + 0.15 * zoomRough;  // rougher far off
     float kd = 0.7 * k;  // diagonal ring, pulled in so the cone stays round
     vec3 reflected = (envColor(Pworld, refl) +
                       envColor(Pworld, normalize(refl + k * t1)) +
@@ -199,9 +209,12 @@ void main() {
     // on the smooth, camera-facing interior.
     vec3 L = normalize(uLightDirView);
     vec3 H = normalize(L + V);
+    // Broaden and dim the highlight as the body recedes, so the sharp exponent
+    // cannot punch a lone white pixel through a distant bead's noisy normal.
+    float specExp = 22.0 / (1.0 + 0.7 * zoomRough);
     float spec =
-        pow(max(dot(N, H), 0.0), 22.0) * smoothstep(0.0, 0.10, thickness) * NdotV;
-    color += vec3(1.0, 0.97, 0.92) * spec * 0.5;
+        pow(max(dot(N, H), 0.0), specExp) * smoothstep(0.0, 0.10, thickness) * NdotV;
+    color += vec3(1.0, 0.97, 0.92) * spec * (0.5 / (1.0 + 1.5 * zoomRough));
 
     // Fade the razor-thin rim into the background. The reconstructed normal is
     // unreliable at the silhouette (its outward neighbour is background), so it
