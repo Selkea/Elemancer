@@ -149,8 +149,12 @@ void main() {
     // smooth the outermost silhouette ring (its outer neighbour is background),
     // so the normal there stays noisy and, since Fresnel makes reflection
     // dominant at grazing, it streaks the sky. Suppressing reflection where the
-    // film is thinnest lets the smooth refracted body show instead.
-    fresnel *= smoothstep(0.0, 0.10, thickness);
+    // film is thinnest lets the smooth refracted body show instead. The fade
+    // widens as the body recedes: a distant body's rim spans only a pixel or two
+    // and jitters as it moves, so its reflection pops as bright specks; pulling
+    // the fade deeper into the body keeps that flickering rim dim.
+    float rimFade = 0.10 * (1.0 + zoomRough);
+    fresnel *= smoothstep(0.0, rimFade, thickness);
 
     // Refraction: offset the background lookup along the actual refracted
     // ray rather than along the normal, so the bend responds to viewing angle
@@ -213,15 +217,16 @@ void main() {
     // cannot punch a lone white pixel through a distant bead's noisy normal.
     float specExp = 22.0 / (1.0 + 0.7 * zoomRough);
     float spec =
-        pow(max(dot(N, H), 0.0), specExp) * smoothstep(0.0, 0.10, thickness) * NdotV;
+        pow(max(dot(N, H), 0.0), specExp) * smoothstep(0.0, rimFade, thickness) * NdotV;
     color += vec3(1.0, 0.97, 0.92) * spec * (0.5 / (1.0 + 1.5 * zoomRough));
 
     // Fade the razor-thin rim into the background. The reconstructed normal is
     // unreliable at the silhouette (its outward neighbour is background), so it
     // streaks the reflection there; a real thin film of water is nearly
     // invisible anyway, so fading it both hides the artefact and softens the
-    // edge.
-    float edge = smoothstep(0.0, 0.05, thickness);
+    // edge. The threshold widens mildly with distance so a small body's jittering
+    // rim dissolves into the sky instead of crawling as an edge sliver.
+    float edge = smoothstep(0.0, 0.05 * (1.0 + 0.6 * zoomRough), thickness);
     color = mix(background, color, edge);
 
     outColor = vec4(color, 1.0);
