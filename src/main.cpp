@@ -380,6 +380,18 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
 }  // namespace
 
 int main(int argc, char** argv) {
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(_M_X64))
+    // The portable shareable build compiles the solver for x86-64-v3 (AVX2/FMA);
+    // this file stays baseline, so this check runs on any CPU and fails cleanly
+    // rather than crashing with an illegal instruction inside the solver on a
+    // pre-2013 machine. (A -march=native local build always passes on its own CPU.)
+    __builtin_cpu_init();
+    if (!__builtin_cpu_supports("avx2")) {
+        std::fprintf(stderr,
+                     "[elemancer] This build needs a CPU with AVX2 (Intel 2013+/AMD 2017+).\n");
+        return 1;
+    }
+#endif
 #ifdef _OPENMP
     // Leave a quarter of the logical cores for the GPU driver and compositor.
     // The SPH step scales out to ~3/4 of the cores and then flattens (it turns

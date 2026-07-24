@@ -51,6 +51,18 @@ target_link_libraries(elemancer_sim PUBLIC glm::glm)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(elemancer_sim PUBLIC OpenMP::OpenMP_CXX)
 endif()
+# Portable shareable build (ELEMANCER_NATIVE=OFF): the rest of the program stays
+# baseline x86-64, but the hot solver still gets AVX2/FMA via x86-64-v3 -- every
+# CPU since ~2013 has it, and it captures the full -march=native win measured here
+# (~6%), so the shared zip runs fast on any modern machine from one binary.
+# main.cpp guards for AVX2 at startup so a rare pre-2013 CPU gets a clear message
+# instead of an illegal-instruction crash. (When NATIVE=ON the global
+# -march=native already covers the solver, so this is skipped.)
+if(NOT ELEMANCER_NATIVE AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+                             CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+  target_compile_options(elemancer_sim PRIVATE -march=x86-64-v3)
+  message(STATUS "Elemancer: solver built for x86-64-v3 (portable AVX2/FMA)")
+endif()
 
 # Dear ImGui (vendored in external/imgui, v1.91.5) for the in-app pause menu and
 # settings panel. Compiled from source into a static lib, so it adds no runtime
