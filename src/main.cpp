@@ -380,6 +380,7 @@ int main(int argc, char** argv) {
     std::string moveShotPath;      // capture a mid-motion frame with accumulated history
     bool noReproject = false;      // disable temporal history reprojection, for the A/B
     bool checkUpdateOnly = false;  // headless: run the update check and print the result
+    std::string checkUpdateVersion; // optional baseline version override for that check
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -438,19 +439,23 @@ int main(int argc, char** argv) {
             noReproject = true;
         } else if (a == "--checkupdate") {
             checkUpdateOnly = true;
+            // Optional version override, to test detection against a real release
+            // from an older baseline: --checkupdate v0.0.1
+            if (i + 1 < argc && argv[i + 1][0] != '-') checkUpdateVersion = argv[++i];
         }
     }
 
     // Headless verification of the update check: hit the real GitHub API and
     // print what it finds (nothing, until a release exists), no window needed.
     if (checkUpdateOnly) {
+        const std::string cur = checkUpdateVersion.empty() ? ELEMANCER_VERSION : checkUpdateVersion;
         elem::Updater u;
-        u.checkAsync(ELEMANCER_REPO, ELEMANCER_VERSION, ".");
+        u.checkAsync(ELEMANCER_REPO, cur, ".");
         for (int i = 0; i < 150 && !u.status().checked; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         const elem::Updater::Status s = u.status();
         std::printf("CHECKUPDATE version=%s checked=%d available=%d latest=%s url=%s\n",
-                    ELEMANCER_VERSION, s.checked ? 1 : 0, s.available ? 1 : 0,
+                    cur.c_str(), s.checked ? 1 : 0, s.available ? 1 : 0,
                     s.latestVersion.c_str(), s.downloadUrl.c_str());
         return 0;
     }
