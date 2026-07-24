@@ -40,6 +40,11 @@ cmake --build build
 ./build/elemancer --menushot menu.bmp
 ./build/elemancer --menushot settings.bmp --menusettings
 
+# Capture a mid-motion frame with the temporal history built up (which --shot,
+# rendering once, cannot show). --noreproject / --notemporal for A/Bs.
+./build/elemancer --moveshot moving.bmp --sweepspeed 3
+./build/elemancer --moveshot moving_noreproj.bmp --sweepspeed 3 --noreproject
+
 # Draw the controls HUD into the capture (otherwise HUD is interactive-only)
 ./build/elemancer --shot out.bmp --hud
 
@@ -127,7 +132,9 @@ workspace needs the same files at that parent's root.
 - **Screen-space fluid surface** — Green (NVIDIA), "Screen Space Fluid Rendering".
   Depth is bilaterally smoothed, then temporally smoothed against the previous
   frame (with a disocclusion guard) so the surface does not boil while the body
-  moves or rotates.
+  moves or rotates. The history is reprojected by the body's screen-space motion
+  (estimated from its centroid) before blending, or a moving body would ghost
+  into trailing arcs the way TAA does without motion vectors.
 - **Surface tension & floor adhesion** — Akinci et al. 2013, "Versatile Surface
   Tension and Adhesion for SPH Fluids": the cohesion spline holds the body
   together, and the adhesion kernel pulls a pool onto the floor plane so it wets

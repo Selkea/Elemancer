@@ -354,6 +354,8 @@ int main(int argc, char** argv) {
     bool benchSprayFlood = false;  // force max spray generation, to measure its cost
     std::string menuShotPath;      // capture the pause menu headlessly, for verification
     bool menuShotSettings = false;  // capture the settings page instead of the buttons
+    std::string moveShotPath;      // capture a mid-motion frame with accumulated history
+    bool noReproject = false;      // disable temporal history reprojection, for the A/B
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -406,6 +408,10 @@ int main(int argc, char** argv) {
             menuShotPath = argv[++i];
         } else if (a == "--menusettings") {
             menuShotSettings = true;
+        } else if (a == "--moveshot" && i + 1 < argc) {
+            moveShotPath = argv[++i];
+        } else if (a == "--noreproject") {
+            noReproject = true;
         }
     }
 
@@ -417,7 +423,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    if (shotMode || benchFrames > 0 || !menuShotPath.empty())
+    if (shotMode || benchFrames > 0 || !menuShotPath.empty() || !moveShotPath.empty())
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* win = glfwCreateWindow(kWidth, kHeight, "Elemancer", nullptr, nullptr);
@@ -461,6 +467,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (noTemporal) renderer.settings().temporalBlend = 0.0f;
+    if (noReproject) renderer.settings().temporalReproject = false;
     if (clarityOverride >= 0.0f) renderer.settings().absorption = clarityOverride;
 
     elem::Fluid fluid;
@@ -525,6 +532,53 @@ int main(int argc, char** argv) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
+        renderer.shutdown();
+        glfwDestroyWindow(win);
+        glfwTerminate();
+        return ok ? 0 : 1;
+    }
+
+    // Capture a mid-motion frame with the temporal history actually built up.
+    // --shot renders once, so its history is empty and it cannot show what the
+    // surface does while the body is dragged; this settles, then translates the
+    // well steadily while rendering every frame, and saves a frame from the
+    // middle of the motion. --sweepspeed sets the drag speed; --notemporal for an
+    // A/B against the raw per-frame surface.
+    if (!moveShotPath.empty()) {
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(win, &fbw, &fbh);
+        const glm::mat4 proj = projFor(fbw, fbh);
+        fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), shotDist));
+        fluid.diffuse().enabled = false;  // isolate the surface
+
+        const float frameDur = static_cast<float>(kSubSteps) * kDt;
+        glm::vec3 wellPos(-1.2f, 0.0f, 0.0f);
+        fluid.setAttractor(wellPos, true);
+        for (int i = 0; i < 150; ++i) {
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+        }
+        // Translate while rendering every frame so the history accumulates.
+        const int moveFrames = 40;
+        for (int i = 0; i < moveFrames; ++i) {
+            wellPos.x += sweepSpeed * frameDur;
+            fluid.setAttractor(wellPos, true);
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                            proj, fbw, fbh, static_cast<float>(i) * frameDur);
+        }
+        glFinish();
+
+        std::vector<unsigned char> px(static_cast<std::size_t>(fbw) * fbh * 3);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_BACK);
+        glReadPixels(0, 0, fbw, fbh, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+        const bool ok = saveBMP(moveShotPath, fbw, fbh, px);
+        glm::vec3 c(0.0f);
+        for (const glm::vec3& p : fluid.positions()) c += p;
+        c /= static_cast<float>(fluid.size());
+        std::printf("MOVESHOT file=%s temporal=%d speed=%.1f centroid.x=%.3f saved=%d\n",
+                    moveShotPath.c_str(), noTemporal ? 0 : 1, sweepSpeed, c.x, ok ? 1 : 0);
+
         renderer.shutdown();
         glfwDestroyWindow(win);
         glfwTerminate();

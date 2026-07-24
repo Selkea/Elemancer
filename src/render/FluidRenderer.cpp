@@ -285,6 +285,21 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     constexpr float kRefDist = 5.0f;
     const float kernelScale = glm::clamp(kRefDist / glm::max(camDist, 0.5f), 0.35f, 1.5f);
 
+    // Body centroid in screen UV, for reprojecting the temporal history by the
+    // body's motion (see the temporal pass). Cheap: one mean over the positions.
+    glm::vec2 centroidUV(0.5f, 0.5f);
+    bool centroidValid = false;
+    if (!positions.empty()) {
+        glm::vec3 c(0.0f);
+        for (const glm::vec3& p : positions) c += p;
+        c /= static_cast<float>(positions.size());
+        const glm::vec4 clip = proj * view * glm::vec4(c, 1.0f);
+        if (clip.w > 1e-5f) {
+            centroidUV = glm::vec2(clip.x / clip.w, clip.y / clip.w) * 0.5f + 0.5f;
+            centroidValid = true;
+        }
+    }
+
     glViewport(0, 0, fbWidth, fbHeight);
 
     // 1. Environment behind the fluid, so refraction has something to bend.
@@ -351,6 +366,10 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
         setInt(progTemporal_, "uHistory", 1);
         setFloat(progTemporal_, "uBlend", settings_.temporalBlend);
         setFloat(progTemporal_, "uMaxDelta", settings_.temporalMaxDelta);
+        glm::vec2 shift(0.0f);
+        if (settings_.temporalReproject && centroidValid && haveCentroid_)
+            shift = centroidUV - prevCentroidUV_;
+        setVec2(progTemporal_, "uHistoryShift", shift);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, source);
         glActiveTexture(GL_TEXTURE1);
@@ -455,6 +474,12 @@ void FluidRenderer::render(const std::vector<glm::vec3>& positions,
     glBlitFramebuffer(0, 0, ssW, ssH, 0, 0, fbWidth, fbHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, fbWidth, fbHeight);  // restore for whatever draws next (HUD)
+
+    // Remember this frame's centroid for next frame's history reprojection.
+    if (centroidValid) {
+        prevCentroidUV_ = centroidUV;
+        haveCentroid_ = true;
+    }
 
     glActiveTexture(GL_TEXTURE0);
 }

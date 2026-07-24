@@ -47,6 +47,9 @@ public:
         // fast flick does not ghost.
         float temporalBlend = 0.65f;
         float temporalMaxDelta = 0.22f;
+        // Reproject the temporal history by the body's screen motion, so a moving
+        // body does not ghost into trailing arcs. Toggleable for an A/B.
+        bool temporalReproject = true;
 
         float refractScale = 0.045f;
 
@@ -112,6 +115,11 @@ private:
     GLuint fboHist_[2] = {0, 0};
     GLuint texHist_[2] = {0, 0};
     int histIndex_ = 0;
+
+    // Previous frame's body centroid in screen UV, to reproject the temporal
+    // history by how far the body moved and keep it stable under motion.
+    glm::vec2 prevCentroidUV_{0.5f, 0.5f};
+    bool haveCentroid_ = false;
 
     GLuint vaoParticles_ = 0, vboParticles_ = 0, vaoQuad_ = 0;
     GLuint vaoSpray_ = 0, vboSpray_ = 0;
