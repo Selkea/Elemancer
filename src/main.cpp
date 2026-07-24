@@ -224,7 +224,7 @@ glm::vec3 cursorOnPlane(GLFWwindow* win, const glm::mat4& view, const glm::mat4&
 // mode, which stays on the compiled defaults so headless verification is
 // reproducible. The file is a plain "key value" list, hand-editable.
 void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity, float spray,
-                int drops, int fpsCap, int vsyncMode) {
+                int drops, int fpsCap, int vsyncMode, int maxSubsteps) {
     std::ofstream f(path, std::ios::trunc);
     if (!f) {
         std::fprintf(stderr, "[elemancer] could not write %s\n", path.c_str());
@@ -240,11 +240,12 @@ void saveConfig(const std::string& path, const elem::FluidParams& p, float clari
       << "spray " << spray << "\n"
       << "drops " << drops << "\n"
       << "fpsCap " << fpsCap << "\n"
-      << "vsync " << vsyncMode << "\n";
+      << "vsync " << vsyncMode << "\n"
+      << "maxSubsteps " << maxSubsteps << "\n";
 }
 
 bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, float& spray,
-                int& drops, int& fpsCap, int& vsyncMode) {
+                int& drops, int& fpsCap, int& vsyncMode, int& maxSubsteps) {
     std::ifstream f(path);
     if (!f) return false;
 
@@ -262,6 +263,7 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, f
         else if (key == "drops") drops = static_cast<int>(v);
         else if (key == "fpsCap") fpsCap = static_cast<int>(v);
         else if (key == "vsync") vsyncMode = static_cast<int>(v);
+        else if (key == "maxSubsteps") maxSubsteps = static_cast<int>(v);
     }
     return true;
 }
@@ -316,7 +318,8 @@ void settingSlider(const char* label, float* v, float lo, float hi, const char* 
 // frozen scene. Slider edits write straight into the live params, so they take
 // effect the instant the sim resumes; the caller persists them to elemancer.cfg.
 void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::DiffuseParams& D,
-                 int& drops, int& fpsCap, int& vsyncMode, const elem::Updater::Status& upd) {
+                 int& drops, int& fpsCap, int& vsyncMode, int& maxSubsteps,
+                 const elem::Updater::Status& upd) {
     ImGuiIO& io = ImGui::GetIO();
 
     // Dim the paused scene so the menu reads clearly on top of it.
@@ -366,7 +369,7 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
         }
         ImGui::End();
     } else {
-        ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(500.0f, 0.0f), ImGuiCond_Always);
         ImGui::Begin("Settings", nullptr,
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoCollapse);
@@ -396,6 +399,14 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
         // machine sustains). The sim is time-based, so this changes only the frame
         // rate, never how fast the liquid moves.
         ImGui::SliderInt("FPS cap", &fpsCap, 0, 240, fpsCap == 0 ? "Off" : "%d fps",
+                         ImGuiSliderFlags_AlwaysClamp);
+        // Max kDt substeps the sim runs per frame. The interactive loop derives the
+        // count from frame time; this is the ceiling. Lower = lighter/more
+        // responsive but the liquid slips into slow motion sooner under load;
+        // higher = fuller motion under load but heavier (and past ~24 it can start
+        // to cascade into a long frame on a settling body). 16 covers the full rate
+        // down to a 60 fps cap.
+        ImGui::SliderInt("Max substeps/frame", &maxSubsteps, 4, 24, "%d",
                          ImGuiSliderFlags_AlwaysClamp);
         ImGui::Spacing();
         ImGui::Separator();
@@ -649,6 +660,7 @@ int main(int argc, char** argv) {
         ui.showSettings = menuShotSettings;
         int menuFpsCap = 0;
         int menuVsync = 2;
+        int menuMaxSub = 16;
         for (int f = 0; f < 2; ++f) {
             renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
                             projFor(fbw, fbh), fbw, fbh, 6.0f);
@@ -656,7 +668,7 @@ int main(int argc, char** argv) {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
             drawPauseUI(ui, fluid.params(), renderer.settings().absorption, fluid.diffuse(),
-                        particleCount, menuFpsCap, menuVsync, elem::Updater::Status{});
+                        particleCount, menuFpsCap, menuVsync, menuMaxSub, elem::Updater::Status{});
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
@@ -1077,10 +1089,12 @@ int main(int argc, char** argv) {
     const std::string cfgPath = assetDir + "/elemancer.cfg";
     int fpsCap = 0;      // 0 = uncapped; >0 = software frame limiter target
     int vsyncMode = 2;   // 0 = Off, 1 = On, 2 = Adaptive (default)
+    int maxSubsteps = kMaxSubStepsPerFrame;  // per-frame sim ceiling; adjustable in Settings
     if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption,
-                   fluid.diffuse().spawnRate, particleCount, fpsCap, vsyncMode)) {
+                   fluid.diffuse().spawnRate, particleCount, fpsCap, vsyncMode, maxSubsteps)) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
+    maxSubsteps = std::clamp(maxSubsteps, 4, 24);  // keep the spiral bounded even if hand-edited
     applyDropCount(particleCount);  // size the drops to the (possibly restored) count
 
     std::printf("[elemancer] mouse moves the well | LMB pull/grab | RMB repel | scroll zoom\n");
@@ -1207,7 +1221,7 @@ int main(int argc, char** argv) {
             if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
             if (saveKey.justPressed(win, GLFW_KEY_S)) {
                 saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
-                           particleCount, fpsCap, vsyncMode);
+                           particleCount, fpsCap, vsyncMode, maxSubsteps);
                 std::printf("[elemancer] saved settings to elemancer.cfg\n");
             }
 
@@ -1235,7 +1249,7 @@ int main(int argc, char** argv) {
             // not the speed. Capped so a hitch cannot cascade.
             const auto simT0 = std::chrono::high_resolution_clock::now();
             simTimeAccum += frameDt * kSimSecondsPerRealSecond;
-            simTimeAccum = std::min(simTimeAccum, kMaxSubStepsPerFrame * kDt);
+            simTimeAccum = std::min(simTimeAccum, static_cast<float>(maxSubsteps) * kDt);
             while (simTimeAccum >= kDt) {
                 fluid.step(kDt);
                 simTimeAccum -= kDt;
@@ -1255,7 +1269,7 @@ int main(int argc, char** argv) {
         ImGui::NewFrame();
         if (ui.paused)
             drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse(), particleCount,
-                        fpsCap, vsyncMode, updater.status());
+                        fpsCap, vsyncMode, maxSubsteps, updater.status());
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1272,7 +1286,7 @@ int main(int argc, char** argv) {
         if (ui.applyUpdate) {
             ui.applyUpdate = false;
             saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
-                       particleCount, fpsCap, vsyncMode);
+                       particleCount, fpsCap, vsyncMode, maxSubsteps);
             std::string err;
             if (updater.applyAndRestart(err)) {
                 std::printf("[elemancer] applying update, restarting...\n");
@@ -1286,7 +1300,7 @@ int main(int argc, char** argv) {
         // so slider edits survive even a hard quit.
         if ((wasPaused && !ui.paused) || ui.exitRequested) {
             saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
-                       particleCount, fpsCap, vsyncMode);
+                       particleCount, fpsCap, vsyncMode, maxSubsteps);
         }
         wasPaused = ui.paused;
         if (ui.exitRequested) break;
@@ -1357,7 +1371,7 @@ int main(int argc, char** argv) {
 
     // Persist whatever was tuned this session.
     saveConfig(cfgPath, fluid.params(), renderer.settings().absorption, fluid.diffuse().spawnRate,
-               particleCount, fpsCap, vsyncMode);
+               particleCount, fpsCap, vsyncMode, maxSubsteps);
     std::printf("[elemancer] saved settings to elemancer.cfg\n");
 
     ImGui_ImplOpenGL3_Shutdown();
