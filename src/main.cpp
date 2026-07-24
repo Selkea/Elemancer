@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -213,7 +214,7 @@ glm::vec3 cursorOnPlane(GLFWwindow* win, const glm::mat4& view, const glm::mat4&
 // mode, which stays on the compiled defaults so headless verification is
 // reproducible. The file is a plain "key value" list, hand-editable.
 void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity, float spray,
-                int drops) {
+                int drops, int fpsCap, int vsyncMode) {
     std::ofstream f(path, std::ios::trunc);
     if (!f) {
         std::fprintf(stderr, "[elemancer] could not write %s\n", path.c_str());
@@ -227,11 +228,13 @@ void saveConfig(const std::string& path, const elem::FluidParams& p, float clari
       << "clarity " << clarity << "\n"
       << "spin " << p.spinRate << "\n"
       << "spray " << spray << "\n"
-      << "drops " << drops << "\n";
+      << "drops " << drops << "\n"
+      << "fpsCap " << fpsCap << "\n"
+      << "vsync " << vsyncMode << "\n";
 }
 
 bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, float& spray,
-                int& drops) {
+                int& drops, int& fpsCap, int& vsyncMode) {
     std::ifstream f(path);
     if (!f) return false;
 
@@ -247,6 +250,8 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, f
         else if (key == "spin") p.spinRate = v;
         else if (key == "spray") spray = v;
         else if (key == "drops") drops = static_cast<int>(v);
+        else if (key == "fpsCap") fpsCap = static_cast<int>(v);
+        else if (key == "vsync") vsyncMode = static_cast<int>(v);
     }
     return true;
 }
@@ -301,7 +306,7 @@ void settingSlider(const char* label, float* v, float lo, float hi, const char* 
 // frozen scene. Slider edits write straight into the live params, so they take
 // effect the instant the sim resumes; the caller persists them to elemancer.cfg.
 void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::DiffuseParams& D,
-                 int& drops, const elem::Updater::Status& upd) {
+                 int& drops, int& fpsCap, int& vsyncMode, const elem::Updater::Status& upd) {
     ImGuiIO& io = ImGui::GetIO();
 
     // Dim the paused scene so the menu reads clearly on top of it.
@@ -370,6 +375,18 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
         settingSlider("Clarity", &absorption, 0.02f, 2.5f, "%.2f");
         settingSlider("Spin", &P.spinRate, 0.0f, 12.0f, "%.1f");
         settingSlider("Spray amount", &D.spawnRate, 0.0f, 2000.0f, "%.0f");
+        // VSync: On = lock to the refresh (no tearing, but at 240 Hz it steps hard
+        // to 120/80/60 when a frame overruns); Off = present immediately (tears,
+        // needed for an exact FPS cap); Adaptive = sync when beating the refresh,
+        // tear when below it. Index 0=Off, 1=On, 2=Adaptive.
+        ImGui::Combo("VSync", &vsyncMode, "Off\0On\0Adaptive\0");
+        // Frame-rate cap. 0 = off (runs as fast as it can, so the number floats
+        // with per-frame jitter). A cap holds a steady rate: set VSync to Off and
+        // drag this down until the fps stops fluctuating (just under what the
+        // machine sustains). The sim is time-based, so this changes only the frame
+        // rate, never how fast the liquid moves.
+        ImGui::SliderInt("FPS cap", &fpsCap, 0, 240, fpsCap == 0 ? "Off" : "%d fps",
+                         ImGuiSliderFlags_AlwaysClamp);
         ImGui::Spacing();
         ImGui::Separator();
         if (ImGui::Button("Back", ImVec2(140.0f, 32.0f))) ui.showSettings = false;
@@ -543,19 +560,17 @@ int main(int argc, char** argv) {
         return 1;
     }
     glGetError();  // GLEW's loader leaves a benign INVALID_ENUM behind.
-    // Adaptive vsync: sync to the refresh when a frame beats it (no tearing at
-    // the cap), but let a frame that overruns the refresh present immediately
-    // instead of waiting a whole extra interval. At 240 Hz that matters -- plain
-    // vsync snaps any frame over 4.17 ms straight down to 120/80/60, so a settled
-    // body that cannot quite hit 240 dropped to a jarring ~70-85; adaptive lets it
-    // run at its true rate (~150-200) and only tears when below the cap, which is
-    // hard to see at 240. Falls back to hard vsync where tear control is absent.
-    if (glfwExtensionSupported("WGL_EXT_swap_control_tear") ||
-        glfwExtensionSupported("GLX_EXT_swap_control_tear")) {
-        glfwSwapInterval(-1);
-    } else {
-        glfwSwapInterval(1);
-    }
+    // Frame pacing has two modes, switched live from the FPS-cap setting:
+    //  - cap 0: adaptive vsync -- sync to the refresh when a frame beats it, but
+    //    let a frame that overruns present immediately instead of waiting a whole
+    //    extra interval. At 240 Hz that matters (plain vsync snaps anything over
+    //    4.17 ms to 120/80/60), but it runs uncapped so the fps floats with jitter.
+    //  - cap N: vsync OFF + a software limiter (loop end) holds a steady N, so the
+    //    rate and pacing stop floating. Since the sim is time-based, the cap only
+    //    changes the frame rate, not the motion. The loop's applyPacing() sets the
+    //    interval when the cap changes; here we just note tear-control support.
+    const bool tearOk = glfwExtensionSupported("WGL_EXT_swap_control_tear") ||
+                        glfwExtensionSupported("GLX_EXT_swap_control_tear");
     glfwSetScrollCallback(win, scrollCallback);
 
     // Dear ImGui for the pause menu / settings panel. Installed after our scroll
@@ -622,6 +637,8 @@ int main(int argc, char** argv) {
         UiState ui;
         ui.paused = true;
         ui.showSettings = menuShotSettings;
+        int menuFpsCap = 0;
+        int menuVsync = 2;
         for (int f = 0; f < 2; ++f) {
             renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
                             projFor(fbw, fbh), fbw, fbh, 6.0f);
@@ -629,7 +646,7 @@ int main(int argc, char** argv) {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
             drawPauseUI(ui, fluid.params(), renderer.settings().absorption, fluid.diffuse(),
-                        particleCount, elem::Updater::Status{});
+                        particleCount, menuFpsCap, menuVsync, elem::Updater::Status{});
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
@@ -1048,8 +1065,10 @@ int main(int argc, char** argv) {
 
     // Restore any values tuned in a previous session, then keep them saved.
     const std::string cfgPath = assetDir + "/elemancer.cfg";
+    int fpsCap = 0;      // 0 = uncapped; >0 = software frame limiter target
+    int vsyncMode = 2;   // 0 = Off, 1 = On, 2 = Adaptive (default)
     if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption,
-                   fluid.diffuse().spawnRate, particleCount)) {
+                   fluid.diffuse().spawnRate, particleCount, fpsCap, vsyncMode)) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
     applyDropCount(particleCount);  // size the drops to the (possibly restored) count
@@ -1084,6 +1103,7 @@ int main(int argc, char** argv) {
     bool gravityMode = false;  // toggled by G: liquid falls, LMB grabs it back
 
     auto last = std::chrono::high_resolution_clock::now();
+    int pacedVsync = -1;  // last vsync mode the swap interval was set for; -1 forces frame-1 apply
     double titleTimer = 0.0;
     double fpsAccum = 0.0;
     int fpsFrames = 0;
@@ -1109,6 +1129,15 @@ int main(int argc, char** argv) {
         const float frameDt =
             std::min(0.1f, std::chrono::duration<float>(now - last).count());
         last = now;
+
+        // Apply the VSync mode when it changes (Off=0, On=1, Adaptive=2 -> -1,
+        // falling back to hard vsync where tear control is absent). The FPS cap
+        // is independent: its limiter runs at the loop end regardless, though an
+        // exact cap wants VSync Off so the vblank grid does not requantise it.
+        if (vsyncMode != pacedVsync) {
+            glfwSwapInterval(vsyncMode == 0 ? 0 : vsyncMode == 1 ? 1 : (tearOk ? -1 : 1));
+            pacedVsync = vsyncMode;
+        }
 
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(win, &fbw, &fbh);
@@ -1156,7 +1185,7 @@ int main(int argc, char** argv) {
             if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
             if (saveKey.justPressed(win, GLFW_KEY_S)) {
                 saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
-                           particleCount);
+                           particleCount, fpsCap, vsyncMode);
                 std::printf("[elemancer] saved settings to elemancer.cfg\n");
             }
 
@@ -1204,7 +1233,7 @@ int main(int argc, char** argv) {
         ImGui::NewFrame();
         if (ui.paused)
             drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse(), particleCount,
-                        updater.status());
+                        fpsCap, vsyncMode, updater.status());
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1221,7 +1250,7 @@ int main(int argc, char** argv) {
         if (ui.applyUpdate) {
             ui.applyUpdate = false;
             saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
-                       particleCount);
+                       particleCount, fpsCap, vsyncMode);
             std::string err;
             if (updater.applyAndRestart(err)) {
                 std::printf("[elemancer] applying update, restarting...\n");
@@ -1235,12 +1264,28 @@ int main(int argc, char** argv) {
         // so slider edits survive even a hard quit.
         if ((wasPaused && !ui.paused) || ui.exitRequested) {
             saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
-                       particleCount);
+                       particleCount, fpsCap, vsyncMode);
         }
         wasPaused = ui.paused;
         if (ui.exitRequested) break;
 
         glfwSwapBuffers(win);
+
+        // Software frame limiter: when a cap is set, hold this frame to 1/cap
+        // since it began (vsync is off in this mode). Sleep the bulk, then spin
+        // the last ~1 ms so the pacing is even and the rate steady, rather than
+        // floating with per-frame compute jitter. Only engages when the machine
+        // is running faster than the cap; a heavier frame just runs uncapped.
+        if (fpsCap > 0) {
+            const auto target =
+                last + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
+                           std::chrono::duration<double>(1.0 / fpsCap));
+            const auto slack = std::chrono::high_resolution_clock::now();
+            if (target - slack > std::chrono::milliseconds(2)) {
+                std::this_thread::sleep_for(target - slack - std::chrono::milliseconds(1));
+            }
+            while (std::chrono::high_resolution_clock::now() < target) { /* spin the tail */ }
+        }
 
         fpsAccum += frameDt;
         if (++fpsFrames >= 30) {
@@ -1272,7 +1317,7 @@ int main(int argc, char** argv) {
 
     // Persist whatever was tuned this session.
     saveConfig(cfgPath, fluid.params(), renderer.settings().absorption, fluid.diffuse().spawnRate,
-               particleCount);
+               particleCount, fpsCap, vsyncMode);
     std::printf("[elemancer] saved settings to elemancer.cfg\n");
 
     ImGui_ImplOpenGL3_Shutdown();
