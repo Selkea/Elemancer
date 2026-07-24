@@ -79,6 +79,18 @@ constexpr float kCamDistance = 5.0f;
 constexpr float kDepthHalf = 0.7f;
 constexpr float kGravity = 15.0f;  // downward pull in gravity mode
 
+// Drop-count sizing. Changing the number of drops resizes each one so the total
+// liquid volume is unchanged: the settled volume is ~ N * spacing^3 ~ N * h^3,
+// so holding it fixed means h ~ N^(-1/3). The render radius scales with h too, so
+// the surface stays as full (radius / spacing is constant). Anchored at the
+// defaults: kDropsRef drops give h = kHRef and render radius kRadiusRef. The
+// solver is written to be scale-independent, so this changes resolution, not feel.
+constexpr int kDropsRef = 6000;
+constexpr float kHRef = 0.044f;       // must match FluidParams::h default
+constexpr float kRadiusRef = 0.040f;  // must match FluidRenderer::Settings::radius default
+constexpr int kMinDrops = 1000;
+constexpr int kMaxDrops = 16000;
+
 // Accumulated mouse-wheel movement, drained each frame to dolly the camera.
 // GLFW scroll only arrives through a callback, so it lands here.
 double g_scrollY = 0.0;
@@ -171,7 +183,8 @@ glm::vec3 cursorOnPlane(GLFWwindow* win, const glm::mat4& view, const glm::mat4&
 // dialled in by feel survives a restart. Deliberately not loaded in --shot
 // mode, which stays on the compiled defaults so headless verification is
 // reproducible. The file is a plain "key value" list, hand-editable.
-void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity, float spray) {
+void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity, float spray,
+                int drops) {
     std::ofstream f(path, std::ios::trunc);
     if (!f) {
         std::fprintf(stderr, "[elemancer] could not write %s\n", path.c_str());
@@ -184,10 +197,12 @@ void saveConfig(const std::string& path, const elem::FluidParams& p, float clari
       << "holdRadius " << p.wellHoldRadius << "\n"
       << "clarity " << clarity << "\n"
       << "spin " << p.spinRate << "\n"
-      << "spray " << spray << "\n";
+      << "spray " << spray << "\n"
+      << "drops " << drops << "\n";
 }
 
-bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, float& spray) {
+bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, float& spray,
+                int& drops) {
     std::ifstream f(path);
     if (!f) return false;
 
@@ -202,6 +217,7 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, f
         else if (key == "clarity") clarity = v;
         else if (key == "spin") p.spinRate = v;
         else if (key == "spray") spray = v;
+        else if (key == "drops") drops = static_cast<int>(v);
     }
     return true;
 }
@@ -240,6 +256,7 @@ struct UiState {
     bool paused = false;
     bool showSettings = false;
     bool exitRequested = false;
+    bool dropsChanged = false;  // the drop-count slider was committed; re-init
 };
 
 // One centered ImGui slider that keeps a HUD-hotkey range in sync. Ctrl+Click
@@ -252,7 +269,8 @@ void settingSlider(const char* label, float* v, float lo, float hi, const char* 
 // The Escape pause menu and its settings page, drawn with Dear ImGui over the
 // frozen scene. Slider edits write straight into the live params, so they take
 // effect the instant the sim resumes; the caller persists them to elemancer.cfg.
-void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::DiffuseParams& D) {
+void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::DiffuseParams& D,
+                 int& drops) {
     ImGuiIO& io = ImGui::GetIO();
 
     // Dim the paused scene so the menu reads clearly on top of it.
@@ -288,6 +306,11 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
                          ImGuiWindowFlags_NoCollapse);
         ImGui::TextDisabled("Drag a slider, or Ctrl+Click to type a value.");
         ImGui::Spacing();
+        // Drop count. Applied on release (a re-init), and each drop is resized to
+        // keep the total volume the same. Ctrl+Click to type an exact count.
+        ImGui::SliderInt("Drops", &drops, kMinDrops, kMaxDrops, "%d",
+                         ImGuiSliderFlags_AlwaysClamp);
+        if (ImGui::IsItemDeactivatedAfterEdit()) ui.dropsChanged = true;
         settingSlider("Surface tension", &P.surfaceTension, 0.005f, 2.5f, "%.3f");
         settingSlider("Well strength", &P.wellStiffness, 3.0f, 200.0f, "%.1f");
         settingSlider("Viscosity", &P.viscosity, 0.1f, 60.0f, "%.1f");
@@ -484,7 +507,8 @@ int main(int argc, char** argv) {
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
-            drawPauseUI(ui, fluid.params(), renderer.settings().absorption, fluid.diffuse());
+            drawPauseUI(ui, fluid.params(), renderer.settings().absorption, fluid.diffuse(),
+                        particleCount);
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
@@ -841,12 +865,26 @@ int main(int argc, char** argv) {
         return ok ? 0 : 1;
     }
 
+    // Re-init the body at a given drop count, resizing each drop (via h and the
+    // render radius) so the total liquid volume is unchanged. particleCount is
+    // the live count; the Settings slider and the config both drive this.
+    const auto applyDropCount = [&](int n) {
+        particleCount = std::clamp(n, kMinDrops, kMaxDrops);
+        const float h =
+            kHRef * std::cbrt(static_cast<float>(kDropsRef) / static_cast<float>(particleCount));
+        fluid.params().h = h;
+        fluid.params().mass = 0.0f;  // re-derive from the new spacing
+        fluid.init(particleCount);
+        renderer.settings().radius = kRadiusRef * (h / kHRef);
+    };
+
     // Restore any values tuned in a previous session, then keep them saved.
     const std::string cfgPath = assetDir + "/elemancer.cfg";
     if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption,
-                   fluid.diffuse().spawnRate)) {
+                   fluid.diffuse().spawnRate, particleCount)) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
+    applyDropCount(particleCount);  // size the drops to the (possibly restored) count
 
     std::printf("[elemancer] mouse moves the well | LMB pull/grab | RMB repel | scroll zoom\n");
     std::printf("[elemancer] [ ] tension | - = well | , . viscosity | ; ' drag\n");
@@ -935,7 +973,8 @@ int main(int argc, char** argv) {
             if (gravityKey.justPressed(win, GLFW_KEY_G)) gravityMode = !gravityMode;
             if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
             if (saveKey.justPressed(win, GLFW_KEY_S)) {
-                saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate);
+                saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
+                           particleCount);
                 std::printf("[elemancer] saved settings to elemancer.cfg\n");
             }
 
@@ -970,14 +1009,23 @@ int main(int argc, char** argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         if (ui.paused)
-            drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse());
+            drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse(), particleCount);
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // A committed drop-count change re-inits the body at the new count, with
+        // each drop resized to hold the volume. Done here (not mid-widget) so the
+        // re-init happens once, after the slider is released or a value typed.
+        if (ui.dropsChanged) {
+            applyDropCount(particleCount);
+            ui.dropsChanged = false;
+        }
 
         // Persist the moment the menu is dismissed (Resume/Esc) or Exit is chosen,
         // so slider edits survive even a hard quit.
         if ((wasPaused && !ui.paused) || ui.exitRequested) {
-            saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate);
+            saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
+                       particleCount);
         }
         wasPaused = ui.paused;
         if (ui.exitRequested) break;
@@ -1007,7 +1055,8 @@ int main(int argc, char** argv) {
     }
 
     // Persist whatever was tuned this session.
-    saveConfig(cfgPath, fluid.params(), renderer.settings().absorption, fluid.diffuse().spawnRate);
+    saveConfig(cfgPath, fluid.params(), renderer.settings().absorption, fluid.diffuse().spawnRate,
+               particleCount);
     std::printf("[elemancer] saved settings to elemancer.cfg\n");
 
     ImGui_ImplOpenGL3_Shutdown();

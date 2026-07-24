@@ -76,7 +76,10 @@ through a peak cursor speed of ~8; beyond that the tail trails and stretches
 Escape pauses the simulation and opens a centered menu with **Resume**,
 **Settings** and **Exit Elemancer**. The Settings page has a slider for every
 tunable (drag it, or Ctrl+Click to type an exact value); changes take effect the
-instant you resume and are saved to `elemancer.cfg`.
+instant you resume and are saved to `elemancer.cfg`. The **Drops** slider changes
+the particle count and resizes each drop so the total liquid volume is unchanged
+(smoothing radius `h` scales as `count^(-1/3)`), so a body rendered with more,
+finer drops is the same size as one with fewer, larger drops.
 
 The tuning keys scale their value while held; the current values are shown both
 in an on-screen HUD panel and in the window title bar.
