@@ -1,6 +1,10 @@
 {
   "//": "For when Elemancer is opened as its own folder. The copy that VS Code actually reads for the Desktop/Claude workspace lives at that workspace's root .vscode/.",
   "version": "2.0.0",
+  "//statusbar": "Status-bar buttons via the 'Tasks' extension (actboy168.tasks). Hidden by default; each button below opts in with options.statusbar. Standard VS Code ignores the statusbar key (it may show a harmless schema hint until the extension is installed).",
+  "options": {
+    "statusbar": { "hide": true }
+  },
   "tasks": [
     {
       "label": "Elemancer: Build",
@@ -38,7 +42,13 @@
       "command": "${workspaceFolder}/build/elemancer.exe",
       "options": {
         "cwd": "${workspaceFolder}",
-        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" },
+        "statusbar": {
+          "hide": false,
+          "label": "$(run) Elemancer",
+          "color": "#7fd86f",
+          "tooltip": "Build & launch Elemancer"
+        }
       },
       "dependsOn": "Elemancer: Build",
       "problemMatcher": [],
@@ -50,7 +60,12 @@
       "type": "shell",
       "command": "${workspaceFolder}/build/test_sim.exe",
       "options": {
-        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" },
+        "statusbar": {
+          "hide": false,
+          "label": "$(beaker) Test",
+          "tooltip": "Build & run the headless solver check (SIMTEST PASS/FAIL)"
+        }
       },
       "dependsOn": "Elemancer: Build",
       "problemMatcher": [],
@@ -64,7 +79,12 @@
       "args": ["--shot", "${workspaceFolder}/shot.bmp"],
       "options": {
         "cwd": "${workspaceFolder}",
-        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" }
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" },
+        "statusbar": {
+          "hide": false,
+          "label": "$(device-camera) Shot",
+          "tooltip": "Render one headless frame to shot.bmp"
+        }
       },
       "dependsOn": "Elemancer: Build",
       "problemMatcher": [],
