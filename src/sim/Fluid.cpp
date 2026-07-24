@@ -254,7 +254,16 @@ void Fluid::step(float dt) {
 
     // Pass 1: density, then equation-of-state pressure. Negative pressure is
     // clamped away; letting it go tensile makes particles clump and blow up.
-#pragma omp parallel for schedule(static)
+    //
+    // schedule(dynamic) not static: this is a hybrid CPU (Intel P+E cores) where
+    // an equal split makes every fast P-core idle at the barrier waiting on the
+    // ~2x slower E-cores each substep. Dynamic hands out chunks on demand, so the
+    // P-cores pull more and the E-cores less and the barrier wait collapses. The
+    // effect is small when the box is idle (P-cores free) but large in the live
+    // window, where the GPU driver and compositor hold the P-cores and the static
+    // split leaned the sim onto the E-cores. Chunk 32 keeps the work-stealing
+    // atomics negligible against the heavy per-particle neighbour loop.
+#pragma omp parallel for schedule(dynamic, 32)
     for (int i = 0; i < n; ++i) {
         const glm::vec3 pi = pos_[i];
         const glm::vec3 rel = (pi - gridMin_) / cellSize_;
@@ -289,8 +298,9 @@ void Fluid::step(float dt) {
         pressure_[i] = std::max(0.0f, P.stiffness * (density_[i] - P.restDensity));
     }
 
-    // Pass 2: pressure, viscosity and cohesion, then body forces.
-#pragma omp parallel for schedule(static)
+    // Pass 2: pressure, viscosity and cohesion, then body forces. Dynamic for the
+    // same hybrid-core reason as pass 1.
+#pragma omp parallel for schedule(dynamic, 32)
     for (int i = 0; i < n; ++i) {
         const glm::vec3 pi = pos_[i];
         const glm::vec3 vi = vel_[i];
