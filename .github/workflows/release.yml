@@ -1,0 +1,58 @@
+# Build the portable win64 package and publish it as a GitHub Release whenever a
+# version tag (v*) is pushed. The in-app updater checks releases/latest and
+# downloads the attached Elemancer-win64.zip, so cutting a release is just:
+#   git tag v0.2.0 && git push origin v0.2.0
+# The build uses the same MSYS2 UCRT64 toolchain as local development.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # so the built-in token can create the release
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout (with tags, so git describe sees the version)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            gawk
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-glew
+            mingw-w64-ucrt-x86_64-glm
+
+      - name: Configure
+        run: |
+          # git describe (used to bake the version) must trust this checkout, and
+          # this runs before cmake, which invokes git describe.
+          git config --global --add safe.directory "$(pwd)"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build and package
+        run: ./package.sh
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Elemancer-win64.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

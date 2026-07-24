@@ -24,6 +24,7 @@
 #include "render/FluidRenderer.h"
 #include "render/Hud.h"
 #include "sim/Fluid.h"
+#include "update/Updater.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -257,6 +258,8 @@ struct UiState {
     bool showSettings = false;
     bool exitRequested = false;
     bool dropsChanged = false;  // the drop-count slider was committed; re-init
+    bool applyUpdate = false;   // the Update & Restart button was clicked
+    std::string updateError;    // shown under the button if applying failed
 };
 
 // One centered ImGui slider that keeps a HUD-hotkey range in sync. Ctrl+Click
@@ -270,7 +273,7 @@ void settingSlider(const char* label, float* v, float lo, float hi, const char* 
 // frozen scene. Slider edits write straight into the live params, so they take
 // effect the instant the sim resumes; the caller persists them to elemancer.cfg.
 void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::DiffuseParams& D,
-                 int& drops) {
+                 int& drops, const elem::Updater::Status& upd) {
     ImGuiIO& io = ImGui::GetIO();
 
     // Dim the paused scene so the menu reads clearly on top of it.
@@ -298,6 +301,26 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
         if (ImGui::Button("Resume", b)) { ui.paused = false; ui.showSettings = false; }
         if (ImGui::Button("Settings", b)) ui.showSettings = true;
         if (ImGui::Button("Exit Elemancer", b)) ui.exitRequested = true;
+
+        // Update notice, shown only when a newer release was found.
+        if (upd.available) {
+            ImGui::Dummy(ImVec2(0.0f, 6.0f));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 2.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(150, 220, 150, 255));
+            ImGui::TextUnformatted(("Update available: " + upd.latestVersion).c_str());
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(46, 120, 60, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(58, 150, 74, 255));
+            const bool clicked = ImGui::Button("Update & Restart", b);
+            ImGui::PopStyleColor(2);
+            if (clicked) ui.applyUpdate = true;
+            if (!ui.updateError.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 150, 150, 255));
+                ImGui::TextWrapped("%s", ui.updateError.c_str());
+                ImGui::PopStyleColor();
+            }
+        }
         ImGui::End();
     } else {
         ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Always);
@@ -356,6 +379,7 @@ int main(int argc, char** argv) {
     bool menuShotSettings = false;  // capture the settings page instead of the buttons
     std::string moveShotPath;      // capture a mid-motion frame with accumulated history
     bool noReproject = false;      // disable temporal history reprojection, for the A/B
+    bool checkUpdateOnly = false;  // headless: run the update check and print the result
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -412,7 +436,23 @@ int main(int argc, char** argv) {
             moveShotPath = argv[++i];
         } else if (a == "--noreproject") {
             noReproject = true;
+        } else if (a == "--checkupdate") {
+            checkUpdateOnly = true;
         }
+    }
+
+    // Headless verification of the update check: hit the real GitHub API and
+    // print what it finds (nothing, until a release exists), no window needed.
+    if (checkUpdateOnly) {
+        elem::Updater u;
+        u.checkAsync(ELEMANCER_REPO, ELEMANCER_VERSION, ".");
+        for (int i = 0; i < 150 && !u.status().checked; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const elem::Updater::Status s = u.status();
+        std::printf("CHECKUPDATE version=%s checked=%d available=%d latest=%s url=%s\n",
+                    ELEMANCER_VERSION, s.checked ? 1 : 0, s.available ? 1 : 0,
+                    s.latestVersion.c_str(), s.downloadUrl.c_str());
+        return 0;
     }
 
     if (!glfwInit()) {
@@ -515,7 +555,7 @@ int main(int argc, char** argv) {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
             drawPauseUI(ui, fluid.params(), renderer.settings().absorption, fluid.diffuse(),
-                        particleCount);
+                        particleCount, elem::Updater::Status{});
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
@@ -945,6 +985,17 @@ int main(int argc, char** argv) {
     std::printf("[elemancer] 9 0 hold radius | O P clarity | K L spin\n");
     std::printf("[elemancer] G gravity mode (hold LMB to grab) | R reset | S save | Tab | Esc\n");
 
+    // Check GitHub for a newer release, in the background so it never stalls
+    // startup. Only for a packaged build (shaders found beside the exe): a dev
+    // build run from the source tree updates via git, and must not have its
+    // files swapped out from under it. The result surfaces in the pause menu.
+    elem::Updater updater;
+    const bool packaged = !exeDir().empty() && assetDir == exeDir();
+    if (packaged) {
+        std::printf("[elemancer] version %s | checking for updates...\n", ELEMANCER_VERSION);
+        updater.checkAsync(ELEMANCER_REPO, ELEMANCER_VERSION, assetDir);
+    }
+
     elem::Hud hud;
     if (!hud.init()) std::fprintf(stderr, "[elemancer] hud init failed\n");
     bool showHud = true;
@@ -1063,7 +1114,8 @@ int main(int argc, char** argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         if (ui.paused)
-            drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse(), particleCount);
+            drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse(), particleCount,
+                        updater.status());
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1073,6 +1125,21 @@ int main(int argc, char** argv) {
         if (ui.dropsChanged) {
             applyDropCount(particleCount);
             ui.dropsChanged = false;
+        }
+
+        // Update & Restart: persist settings first, then hand off to the helper
+        // that swaps the files once we exit. On success we break out and quit.
+        if (ui.applyUpdate) {
+            ui.applyUpdate = false;
+            saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate,
+                       particleCount);
+            std::string err;
+            if (updater.applyAndRestart(err)) {
+                std::printf("[elemancer] applying update, restarting...\n");
+                break;
+            }
+            ui.updateError = "Update failed: " + err;
+            std::fprintf(stderr, "[elemancer] update failed: %s\n", err.c_str());
         }
 
         // Persist the moment the menu is dismissed (Resume/Esc) or Exit is chosen,

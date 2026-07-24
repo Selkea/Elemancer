@@ -112,6 +112,29 @@ the executable, its `shaders/`, and the MSYS2 runtime DLLs it links
 relocatable; delete `elemancer.cfg` before zipping to ship the compiled default
 tuning rather than yours.
 
+## Releases and auto-update
+
+A packaged build knows its version (baked from `git describe` at configure time)
+and, on launch, checks GitHub for a newer release in the background. If one is
+found, the pause menu (`Esc`) shows **Update available** with an **Update &
+Restart** button that downloads the new `Elemancer-win64.zip`, swaps it in over
+the install (via a small helper that waits for the app to exit, since a running
+exe can't overwrite itself), and relaunches. The check runs only for a packaged
+build — a dev build run from the source tree is left alone, since it updates via
+`git`. Verify the check headlessly with `./build/elemancer --checkupdate`.
+
+Cutting a release is just a tag push:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The `.github/workflows/release.yml` Action then builds the win64 package on a
+Windows runner (same MSYS2 UCRT64 toolchain) and publishes it as a GitHub Release
+with the zip attached — no `gh` or manual upload needed. Use semver tags
+(`vMAJOR.MINOR.PATCH`); the updater compares them numerically.
+
 ## Running from VS Code
 
 `Ctrl+Shift+B` builds. `F5` builds and launches under gdb. Other targets are

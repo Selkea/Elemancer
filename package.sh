@@ -13,6 +13,9 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")" && pwd)"
 dist="$root/dist/Elemancer"
 
+# Reconfigure so the baked-in version (git describe, resolved at configure time)
+# matches the current tag/commit, then build.
+cmake -S "$root" -B "$root/build" -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build "$root/build"
 
 rm -rf "$root/dist"
