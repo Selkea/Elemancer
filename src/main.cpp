@@ -372,10 +372,14 @@ int main(int argc, char** argv) {
     // why the same settled body that costs ~5 ms headless cost ~10-13 ms in the
     // live window. Capping frees the P-core hyperthread siblings for the driver
     // at no measured cost to the sim (24 vs 32 threads bench-identical here).
-    // OMP_NUM_THREADS, if the user sets it, still wins (for tuning sweeps).
+    // OMP_NUM_THREADS, if the user sets it, still wins (for tuning sweeps). The
+    // startup line prints what actually took effect, since one cold start hitched
+    // to ~60 ms once and the thread count is the first thing to check if it recurs.
     if (!std::getenv("OMP_NUM_THREADS")) {
         omp_set_num_threads(std::max(2, omp_get_num_procs() * 3 / 4));
     }
+    std::printf("[elemancer] OpenMP: procs=%d threads=%d\n", omp_get_num_procs(),
+                omp_get_max_threads());
 #endif
     bool shotMode = false;
     std::string shotPath = "elemancer_shot.bmp";
