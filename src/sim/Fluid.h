@@ -153,15 +153,21 @@ struct DiffuseParams {
     // Kinetic energy gates the whole thing, so spray appears when the liquid
     // is actually being thrown around and not while it sits on the cursor.
     // Gated by kinetic energy 0.5 m v^2. Mass scales with spacing^3, so these
-    // must track the particle scale: at h=0.044 the mass is ~0.018. Kept low so
-    // spray starts around a gentle v=2.5 rather than a hard flick.
-    float kineticMin = 0.055f;
+    // must track the particle scale: at h=0.044 the mass is ~0.018. Raised from
+    // 0.055 (v~2.5) to 0.11 (v~3.5) once the spray update moved to once-a-frame:
+    // droplets then survive longer (the per-substep spawn-then-reabsorb no longer
+    // culls freshly spawned ones within a substep), which inflated the standing
+    // population most under gentle motion and read as spray exaggerated for
+    // little movement. A higher gate keeps spray tied to real motion.
+    float kineticMin = 0.11f;
     float kineticMax = 1.8f;
 
     // Measured: at the tear (~speed 8) trapped air peaks near 87 and Ek near
-    // 3.5, but that is a brief instant over few particles, so the rate has to
-    // be high to put visible spray on screen.
-    float spawnRate = 1400.0f;     // max samples per fluid particle per second
+    // 3.5, but that is a brief instant over few particles, so the rate is high
+    // to put visible spray on screen. Halved from 1400 to counter the ~2x higher
+    // survival once the update went once-a-frame (see kineticMin) -- together
+    // they bring the on-screen density back to the pre-change feel.
+    float spawnRate = 700.0f;      // max samples per fluid particle per second
     float lifeMin = 0.35f;
     float lifeMax = 1.20f;
     float drag = 0.8f;
