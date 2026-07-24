@@ -251,6 +251,10 @@ int main(int argc, char** argv) {
     float gravityOverride = 0.0f;
     bool dropMode = false;
     float adhesionOverride = -1.0f;
+    int benchFrames = 0;   // >0 => timing bench: measure ms/frame vs distance
+    bool benchNoSpray = false;
+    float benchHz = 1.0f;  // gesture frequency; higher = sharper flicks, more spray
+    bool benchSprayFlood = false;  // force max spray generation, to measure its cost
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -291,6 +295,14 @@ int main(int argc, char** argv) {
             dropMode = true;
         } else if (a == "--adhesion" && i + 1 < argc) {
             adhesionOverride = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--bench" && i + 1 < argc) {
+            benchFrames = std::atoi(argv[++i]);
+        } else if (a == "--nospray") {
+            benchNoSpray = true;
+        } else if (a == "--benchhz" && i + 1 < argc) {
+            benchHz = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--sprayflood") {
+            benchSprayFlood = true;
         }
     }
 
@@ -302,7 +314,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    if (shotMode) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    if (shotMode || benchFrames > 0) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* win = glfwCreateWindow(kWidth, kHeight, "Elemancer", nullptr, nullptr);
     if (!win) {
@@ -356,6 +368,99 @@ int main(int argc, char** argv) {
         return glm::perspective(glm::radians(kFovDegrees),
                                 static_cast<float>(fbw) / static_cast<float>(fbh), 0.05f, 100.0f);
     };
+
+    // Timing bench: settle the body, then whip the well across a fixed *fraction
+    // of the screen* at a fixed gesture frequency, and time step() and render()
+    // separately over N frames. The screen-fraction gesture is the point: the
+    // visible width grows with camera distance, so the same mouse motion that a
+    // user makes maps to a proportionally larger -- and faster -- world sweep
+    // when zoomed out. That is what "the fps drops the further you go" actually
+    // reproduces; a fixed world-space --sweepspeed would not. Prints ms/frame
+    // split into sim vs render, plus the spray count and grid coarsening that
+    // scale the cost, so the distance dependence can be read directly.
+    if (benchFrames > 0) {
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(win, &fbw, &fbh);
+        const float aspect = static_cast<float>(fbw) / static_cast<float>(fbh);
+        fluid.setBounds(boundsForView(aspect, shotDist));
+        if (benchNoSpray) fluid.diffuse().enabled = false;
+        // Force spray to flood so its cost can be measured against a known count,
+        // decoupled from the fact that ordinary cursor motion barely sheds any.
+        if (benchSprayFlood) {
+            elem::DiffuseParams& D = fluid.diffuse();
+            D.trappedAirMin = 0.0f;
+            D.kineticMin = 0.0f;
+            D.spawnRate = 20000.0f;
+        }
+
+        const float frameDur = static_cast<float>(kSubSteps) * kDt;
+
+        // Sweep amplitude tracks the visible half-width so the gesture covers the
+        // same screen fraction at any zoom; a fixed 1 Hz back-and-forth then makes
+        // peak cursor speed scale with distance, as a real mouse gesture does.
+        const float visHalfW =
+            (shotDist - kDepthHalf) * std::tan(glm::radians(kFovDegrees) * 0.5f) * aspect;
+        const float amp = 0.6f * visHalfW;
+        const float omega = 2.0f * 3.14159265f * benchHz;  // benchHz full sweeps/second
+        const float peakCursorSpeed = amp * omega;
+
+        glm::vec3 wellPos(0.0f);
+        fluid.setAttractor(wellPos, true);
+        for (int i = 0; i < 120; ++i) {
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+        }
+
+        // A few warm-up rendered frames: build the FBO targets and seed the
+        // temporal history so the timed loop measures steady state, not setup.
+        for (int i = 0; i < 5; ++i) {
+            renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                            projFor(fbw, fbh), fbw, fbh, 0.0f);
+        }
+        glFinish();
+
+        using clock = std::chrono::high_resolution_clock;
+        double stepMs = 0.0, renderMs = 0.0;
+        std::size_t peakSpray = 0;
+        float t = 0.0f;
+        for (int i = 0; i < benchFrames; ++i) {
+            t += frameDur;
+            wellPos = glm::vec3(amp * std::sin(omega * t), 0.0f, 0.0f);
+            fluid.setAttractor(wellPos, true);
+
+            const auto t0 = clock::now();
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            const auto t1 = clock::now();
+            renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                            projFor(fbw, fbh), fbw, fbh, t);
+            glFinish();
+            const auto t2 = clock::now();
+
+            stepMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+            renderMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+            peakSpray = std::max(peakSpray, fluid.sprayCount());
+        }
+
+        glm::vec3 lo = fluid.positions()[0], hi = fluid.positions()[0];
+        for (const glm::vec3& p : fluid.positions()) {
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+        const float bodySpan = glm::length(hi - lo);
+
+        const double f = static_cast<double>(benchFrames);
+        const double frameMs = (stepMs + renderMs) / f;
+        std::printf("BENCH dist=%.1f spray=%d frames=%d peakCursorSpeed=%.1f"
+                    " frame=%.2fms (sim=%.2f render=%.2f) fps=%.0f"
+                    " sprayPeak=%zu bodySpan=%.2f gridCells=%zu cellSize=%.4f\n",
+                    shotDist, benchNoSpray ? 0 : 1, benchFrames, peakCursorSpeed, frameMs,
+                    stepMs / f, renderMs / f, 1000.0 / frameMs, peakSpray, bodySpan,
+                    fluid.gridCells(), fluid.cellSize());
+
+        renderer.shutdown();
+        glfwDestroyWindow(win);
+        glfwTerminate();
+        return 0;
+    }
 
     if (shotMode) {
         int fbw = 0, fbh = 0;

@@ -170,6 +170,16 @@ struct DiffuseParams {
     // A spray particle back inside the body has rejoined it, so it is removed
     // rather than drawn over the surface.
     int reabsorbNeighbours = 14;
+
+    // The reabsorb test is the one neighbour search in the spray update, and it
+    // ran for every live droplet on every substep (10x a frame) -- which is what
+    // made a heavy spray population tank the frame rate, worse when zoomed out
+    // because the larger domain lets spray live longer and pile up. Spray is
+    // ballistic, so a droplet that has rejoined the body can be culled a frame
+    // late with no visible difference; the search is throttled to run at most
+    // once per this much simulated time (~one frame at the 64 Hz sim rate).
+    // Advection and the cheap life/out-of-bounds culls still run every substep.
+    float reabsorbInterval = 0.015f;
 };
 
 // Muller-2003 SPH with a uniform grid for neighbour lookup. Deliberately free
@@ -206,6 +216,14 @@ public:
     const std::vector<float>& trappedAir() const { return trappedAir_; }
     std::size_t sprayCount() const { return sprayPos_.size(); }
 
+    // Neighbour-grid state after the last buildGrid, for the --bench readout:
+    // the body's span coarsens the cells (cellSize = maxSpan / kMaxDim), which is
+    // what makes each countNeighbours dearer when the body is flung wide.
+    std::size_t gridCells() const {
+        return static_cast<std::size_t>(gridDim_.x) * gridDim_.y * gridDim_.z;
+    }
+    float cellSize() const { return cellSize_; }
+
 private:
     void buildGrid();
     int cellIndex(const glm::vec3& p) const;
@@ -224,6 +242,7 @@ private:
     std::vector<glm::vec3> sprayPos_, sprayVel_;
     std::vector<float> sprayLife_;
     std::mt19937 rng_{9271u};
+    float reabsorbAccum_ = 0.0f;  // simulated time since the last reabsorb search
 
     // Uniform grid stored as one intrusive linked list per cell.
     std::vector<int> cellHead_;

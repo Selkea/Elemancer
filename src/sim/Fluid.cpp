@@ -93,6 +93,7 @@ void Fluid::init(int count, std::uint32_t seed) {
     sprayPos_.clear();
     sprayVel_.clear();
     sprayLife_.clear();
+    reabsorbAccum_ = 0.0f;
 
     buildGrid();
 }
@@ -439,49 +440,36 @@ void Fluid::stepDiffuse(float dt, const glm::vec3& velBulk, const glm::vec3& pos
         sprayPos_.clear();
         sprayVel_.clear();
         sprayLife_.clear();
+        reabsorbAccum_ = 0.0f;
         return;
     }
+
+    // The spray update -- advection, culling and generation -- runs once per
+    // frame-worth of simulated time rather than on every one of the ~10 substeps
+    // in a frame. It used to run every substep, and its one expensive part,
+    // countNeighbours per live droplet (the reabsorb test), then dominated the
+    // frame under heavy spray -- worse when zoomed out, where the larger domain
+    // lets thrown droplets travel longer before hitting a wall, so far more of
+    // them are alive at once. Spray is purely ballistic and drawn as a soft
+    // haze, so integrating it once a frame with the accumulated dt is visually
+    // indistinguishable from 10 small steps but ~10x cheaper. This is the fix
+    // for "the further you go, the more spray kills the fps".
+    reabsorbAccum_ += dt;
+    if (reabsorbAccum_ < D.reabsorbInterval) return;
+    const float sdt = reabsorbAccum_;  // simulated time since the last spray update
+    reabsorbAccum_ = 0.0f;
 
     const FluidParams& P = params_;
     std::uniform_real_distribution<float> uni(0.0f, 1.0f);
 
-    // Advect. Ihmsen treats spray as purely ballistic -- no forces between
-    // diffuse particles, only external ones. Here the cursor well is that
-    // external force, so thrown droplets still arc back toward it instead of
-    // sailing off in a straight line.
-    const float damp = std::max(0.0f, 1.0f - D.drag * dt);
-    std::size_t write = 0;
-    for (std::size_t k = 0; k < sprayPos_.size(); ++k) {
-        glm::vec3 v = sprayVel_[k];
-        v += (wellAccel(sprayPos_[k], velBulk, posBulk) + P.gravity) * dt;
-        v *= damp;
-        const glm::vec3 p = sprayPos_[k] + v * dt;
-
-        const float life = sprayLife_[k] - dt;
-        if (life <= 0.0f) continue;
-
-        bool escaped = false;
-        for (int c = 0; c < 3; ++c) {
-            if (std::fabs(p[c]) > P.boundsHalf[c]) escaped = true;
-        }
-        if (escaped) continue;
-
-        // Enough fluid neighbours means it has rejoined the body, so drop it
-        // rather than draw a droplet floating over the surface.
-        if (countNeighbours(p) >= D.reabsorbNeighbours) continue;
-
-        sprayPos_[write] = p;
-        sprayVel_[write] = v;
-        sprayLife_[write] = life;
-        ++write;
-    }
-    sprayPos_.resize(write);
-    sprayVel_.resize(write);
-    sprayLife_.resize(write);
-
-    // Generate (Ihmsen eq. 8): nd = Ik * (kta * Ita) * dt, with the wave-crest
-    // term dropped -- it needs surface normals, and with no gravity there is
-    // no meaningful wave crest here anyway.
+    // Generate first (Ihmsen eq. 8): nd = Ik * (kta * Ita) * dt, with the
+    // wave-crest term dropped -- it needs surface normals, and with no gravity
+    // there is no meaningful wave crest here anyway. Generating before the
+    // advect/cull pass matters: most droplets are born at a fluid particle, so
+    // inside the body, and the reabsorb test in that same pass removes the ones
+    // that stay embedded. Per-substep, that spawn-then-reabsorb happened every
+    // substep; folding it into the one per-frame pass keeps the spray density
+    // the same instead of letting freshly spawned droplets survive a whole frame.
     const float rV = P.h * 0.35f;
     const int n = static_cast<int>(pos_.size());
     for (int i = 0; i < n && static_cast<int>(sprayPos_.size()) < D.maxCount; ++i) {
@@ -496,7 +484,7 @@ void Fluid::stepDiffuse(float dt, const glm::vec3& velBulk, const glm::vec3& pos
         const float ik = phi(ek, D.kineticMin, D.kineticMax);
         if (ik <= 0.0f) continue;
 
-        const float nd = ik * D.spawnRate * ita * dt;
+        const float nd = ik * D.spawnRate * ita * sdt;
         int count = static_cast<int>(nd);
         if (uni(rng_) < nd - static_cast<float>(count)) ++count;
         if (count <= 0) continue;
@@ -512,7 +500,7 @@ void Fluid::stepDiffuse(float dt, const glm::vec3& velBulk, const glm::vec3& pos
         for (int s = 0; s < count && static_cast<int>(sprayPos_.size()) < D.maxCount; ++s) {
             const float rr = rV * std::sqrt(uni(rng_));
             const float th = uni(rng_) * 6.2831853f;
-            const float hh = uni(rng_) * dt * speed;
+            const float hh = uni(rng_) * sdt * speed;
             const glm::vec3 offset = rr * std::cos(th) * e1 + rr * std::sin(th) * e2;
 
             sprayPos_.push_back(pos_[i] + offset + hh * vhat);
@@ -520,6 +508,41 @@ void Fluid::stepDiffuse(float dt, const glm::vec3& velBulk, const glm::vec3& pos
             sprayLife_.push_back(D.lifeMin + (D.lifeMax - D.lifeMin) * ita);
         }
     }
+
+    // Advect, then cull the dead, escaped, or reabsorbed. Ihmsen treats spray as
+    // purely ballistic -- no forces between diffuse particles, only external
+    // ones. Here the cursor well is that external force, so thrown droplets still
+    // arc back toward it instead of sailing off in a straight line. This pass
+    // also sweeps up the just-spawned droplets that are still inside the body.
+    const float damp = std::max(0.0f, 1.0f - D.drag * sdt);
+    std::size_t write = 0;
+    for (std::size_t k = 0; k < sprayPos_.size(); ++k) {
+        glm::vec3 v = sprayVel_[k];
+        v += (wellAccel(sprayPos_[k], velBulk, posBulk) + P.gravity) * sdt;
+        v *= damp;
+        const glm::vec3 p = sprayPos_[k] + v * sdt;
+
+        const float life = sprayLife_[k] - sdt;
+        if (life <= 0.0f) continue;
+
+        bool escaped = false;
+        for (int c = 0; c < 3; ++c) {
+            if (std::fabs(p[c]) > P.boundsHalf[c]) escaped = true;
+        }
+        if (escaped) continue;
+
+        // Enough fluid neighbours means it has rejoined the body (or was spawned
+        // inside it), so drop it rather than draw a droplet over the surface.
+        if (countNeighbours(p) >= D.reabsorbNeighbours) continue;
+
+        sprayPos_[write] = p;
+        sprayVel_[write] = v;
+        sprayLife_[write] = life;
+        ++write;
+    }
+    sprayPos_.resize(write);
+    sprayVel_.resize(write);
+    sprayLife_.resize(write);
 }
 
 }  // namespace elem

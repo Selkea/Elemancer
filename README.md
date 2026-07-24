@@ -28,6 +28,14 @@ cmake --build build
 # the worst stretch reached. Prints WHIP peakMeanRadius / peakStrays.
 ./build/elemancer --shot out.bmp --sweepspeed 8
 
+# Timing bench: settle, then whip the well across a fixed fraction of the
+# screen (so the sweep scales with zoom, as a real mouse gesture does) and time
+# sim vs render over N frames. Prints ms/frame split, fps, spray count and grid
+# coarsening, so the cost's dependence on camera distance can be read directly.
+./build/elemancer --bench 240 --dist 24 --benchhz 3
+./build/elemancer --bench 240 --dist 24 --benchhz 3 --sprayflood  # force max spray
+./build/elemancer --bench 240 --dist 24 --nospray                 # isolate render+sim
+
 # Draw the controls HUD into the capture (otherwise HUD is interactive-only)
 ./build/elemancer --shot out.bmp --hud
 
