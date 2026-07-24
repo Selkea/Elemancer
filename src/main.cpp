@@ -1027,6 +1027,8 @@ int main(int argc, char** argv) {
     double fpsAccum = 0.0;
     int fpsFrames = 0;
     float fps = 0.0f;
+    double simMsAccum = 0.0;  // CPU time in the substep loop, for the title readout
+    float simMs = 0.0f;
 
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
@@ -1115,7 +1117,11 @@ int main(int argc, char** argv) {
                 fluid.setWellScale(rmb ? -1.0f : lmb ? 3.0f : 1.0f);
             }
 
+            const auto simT0 = std::chrono::high_resolution_clock::now();
             for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            simMsAccum += std::chrono::duration<double, std::milli>(
+                              std::chrono::high_resolution_clock::now() - simT0)
+                              .count();
         }
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view, proj,
@@ -1169,21 +1175,27 @@ int main(int argc, char** argv) {
         fpsAccum += frameDt;
         if (++fpsFrames >= 30) {
             fps = static_cast<float>(fpsFrames / fpsAccum);
+            simMs = static_cast<float>(simMsAccum / fpsFrames);
             fpsAccum = 0.0;
+            simMsAccum = 0.0;
             fpsFrames = 0;
         }
 
         titleTimer += frameDt;
         if (titleTimer > 0.2) {
             titleTimer = 0.0;
-            char title[320];
+            char title[360];
+            // frameMs is the true wall-clock frame (includes the vsync wait); simMs
+            // is the CPU sim alone. simMs close to frameMs => sim-bound; simMs far
+            // below it => the rest (render + vsync) dominates.
+            const float frameMs = fps > 0.0f ? 1000.0f / fps : 0.0f;
             std::snprintf(title, sizeof title,
                           "Elemancer  |  tension %.3f  |  well %.1f  |  visc %.1f  |  drag %.2f"
                           "  |  hold %.2f  |  clarity %.2f  |  spin %.1f"
-                          "  |  %zu drops  |  %zu spray  |  %.0f fps",
+                          "  |  %zu drops  |  %zu spray  |  %.0f fps  (%.1fms: sim %.1f)",
                           P.surfaceTension, P.wellStiffness, P.viscosity, P.drag, P.wellHoldRadius,
                           renderer.settings().absorption, P.spinRate, fluid.size(),
-                          fluid.sprayCount(), fps);
+                          fluid.sprayCount(), fps, frameMs, simMs);
             glfwSetWindowTitle(win, title);
         }
     }
