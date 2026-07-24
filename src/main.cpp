@@ -82,10 +82,26 @@ constexpr int kHeight = 800;
 // rate to ~72 while idle. Eight passes cut settled sim ~20% (6.7 -> 5.3 ms) and
 // the body is bench-identical to ten -- same rest radius, same tear behaviour up
 // to cursor speed 84, same render -- so nothing about the motion changes, there
-// is just more headroom under the refresh cap. Lowering the Drops count is the
+// is just more headroom under the refresh cap. kSubSteps is the fixed per-frame
+// count used by --bench; the interactive loop instead advances by real elapsed
+// time (see kSimSecondsPerRealSecond). Lowering the Drops count is the
 // other lever if more is wanted.
 constexpr int kSubSteps = 8;
 constexpr float kDt = 1.0f / 512.0f;
+
+// The interactive loop advances the sim by real elapsed time, not a fixed number
+// of steps per frame, so the frame rate never changes how fast the liquid moves
+// -- more fps just samples the same motion more finely (smoother), it does not
+// speed it up. kSimSecondsPerRealSecond is the one knob for the overall speed:
+// it is set to 120/64, which reproduces exactly what the old fixed-8-steps loop
+// did at ~120 fps (its habitual rate here), so the liquid looks the same as
+// before, only now steady regardless of fps. Raise it to run the whole sim
+// faster, lower it for slower; 1.0 would be true real time. Each step is still
+// kDt, so stability is unchanged -- only the step *count* per frame varies.
+// A frame is capped at kMaxSubStepsPerFrame steps so a hitch (window drag, a
+// stall) cannot cascade into a longer frame and spiral.
+constexpr float kSimSecondsPerRealSecond = 120.0f / 64.0f;  // ~1.875
+constexpr int kMaxSubStepsPerFrame = 40;
 
 constexpr float kFovDegrees = 45.0f;
 constexpr float kCamDistance = 5.0f;
@@ -1062,6 +1078,7 @@ int main(int argc, char** argv) {
     float fps = 0.0f;
     double simMsAccum = 0.0;  // CPU time in the substep loop, for the title readout
     float simMs = 0.0f;
+    float simTimeAccum = 0.0f;  // real-time-driven sim-time backlog (see kSimSecondsPerRealSecond)
 
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
@@ -1150,8 +1167,16 @@ int main(int argc, char** argv) {
                 fluid.setWellScale(rmb ? -1.0f : lmb ? 3.0f : 1.0f);
             }
 
+            // Advance by real elapsed time: accumulate sim-seconds owed, then run
+            // as many fixed kDt steps as fit. Frame rate sets the step *count*,
+            // not the speed. Capped so a hitch cannot cascade.
             const auto simT0 = std::chrono::high_resolution_clock::now();
-            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+            simTimeAccum += frameDt * kSimSecondsPerRealSecond;
+            simTimeAccum = std::min(simTimeAccum, kMaxSubStepsPerFrame * kDt);
+            while (simTimeAccum >= kDt) {
+                fluid.step(kDt);
+                simTimeAccum -= kDt;
+            }
             simMsAccum += std::chrono::duration<double, std::milli>(
                               std::chrono::high_resolution_clock::now() - simT0)
                               .count();
