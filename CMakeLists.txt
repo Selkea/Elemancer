@@ -86,7 +86,6 @@ target_include_directories(elemancer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/externa
 target_link_libraries(elemancer PRIVATE elemancer_sim OpenGL::GL glfw GLEW::GLEW imgui)
 if(WIN32)
   target_link_libraries(elemancer PRIVATE winhttp)  # update check / download
-  target_link_libraries(elemancer PRIVATE winmm)    # timeBeginPeriod for the frame limiter
 endif()
 target_compile_definitions(elemancer PRIVATE
   ELEMANCER_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}"

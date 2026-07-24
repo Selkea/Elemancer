@@ -26,14 +26,6 @@
 #include <omp.h>
 #endif
 
-#if defined(_WIN32)
-// From winmm. Raise the OS timer resolution to 1 ms so the frame limiter's short
-// sleeps are precise -- the default granularity is ~15 ms, which overshoots the
-// cap and leaves the rate fluctuating below it. Declared here to avoid pulling
-// all of <windows.h> (and its min/max macros) into this file.
-extern "C" unsigned int __stdcall timeBeginPeriod(unsigned int);
-#endif
-
 #include "render/FluidRenderer.h"
 #include "render/Hud.h"
 #include "sim/Fluid.h"
@@ -420,9 +412,6 @@ int main(int argc, char** argv) {
                      "[elemancer] This build needs a CPU with AVX2 (Intel 2013+/AMD 2017+).\n");
         return 1;
     }
-#endif
-#if defined(_WIN32)
-    timeBeginPeriod(1);  // 1 ms timer so the frame limiter can pace precisely
 #endif
 #ifdef _OPENMP
     // Leave a quarter of the logical cores for the GPU driver and compositor.
@@ -1119,6 +1108,18 @@ int main(int argc, char** argv) {
 
     auto last = std::chrono::high_resolution_clock::now();
     int pacedVsync = -1;  // last vsync mode the swap interval was set for; -1 forces frame-1 apply
+#if defined(_WIN32)
+    // High-resolution waitable timer for the FPS limiter. MinGW's sleep_for
+    // ignores timeBeginPeriod and overshoots ~15 ms (measured), which is what left
+    // a capped rate fluctuating below target; this timer waits precisely (~1 ms).
+    // Created once; the OS reclaims it on exit.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+    HANDLE frameTimer = CreateWaitableTimerExW(nullptr, nullptr,
+                                               CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                               TIMER_ALL_ACCESS);
+#endif
     double titleTimer = 0.0;
     double fpsAccum = 0.0;
     int fpsFrames = 0;
@@ -1287,12 +1288,11 @@ int main(int argc, char** argv) {
         glfwSwapBuffers(win);
 
         // Software frame limiter: when a cap is set, hold this frame to 1/cap
-        // since it began (VSync Off in this mode). Nap in 1 ms slices while more
-        // than 2 ms remain -- the 1 ms OS timer set at startup keeps naps precise
-        // -- then busy-spin the last ~2 ms so the frame lands ON the target, not
-        // past it. Overshooting was what left the rate fluctuating below the cap;
-        // re-checking the clock each iteration absorbs any nap jitter. Only
-        // engages when the frame beat the cap; a heavier frame just runs uncapped.
+        // since it began (VSync Off in this mode). Wait out the bulk on the
+        // high-resolution timer (sleep_for is useless here -- ~15 ms granularity),
+        // then busy-spin the last ~2 ms so the frame lands ON the target, not past
+        // it. That overshoot was what left the rate fluctuating below the cap.
+        // Only engages when the frame beat the cap; a heavier frame runs uncapped.
         if (fpsCap > 0) {
             const auto target =
                 last + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
@@ -1300,9 +1300,20 @@ int main(int argc, char** argv) {
             for (;;) {
                 const auto t = std::chrono::high_resolution_clock::now();
                 if (t >= target) break;
-                if (target - t > std::chrono::milliseconds(2))
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#if defined(_WIN32)
+                const auto remain = target - t;
+                if (frameTimer && remain > std::chrono::milliseconds(2)) {
+                    LARGE_INTEGER due;  // negative = relative, in 100 ns ticks; wake ~1 ms early
+                    due.QuadPart = -static_cast<LONGLONG>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            remain - std::chrono::milliseconds(1))
+                            .count() /
+                        100);
+                    if (SetWaitableTimer(frameTimer, &due, 0, nullptr, nullptr, FALSE))
+                        WaitForSingleObject(frameTimer, INFINITE);
+                }
                 // else: fall through to a tight spin, re-checking the clock
+#endif
             }
         }
 
