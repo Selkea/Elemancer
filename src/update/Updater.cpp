@@ -7,8 +7,12 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX  // MinGW's libstdc++ already defines this; guard to avoid a redefinition warning
+#endif
 #include <windows.h>
 #include <winhttp.h>
 #endif
