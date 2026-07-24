@@ -36,6 +36,10 @@ cmake --build build
 ./build/elemancer --bench 240 --dist 24 --benchhz 3 --sprayflood  # force max spray
 ./build/elemancer --bench 240 --dist 24 --nospray                 # isolate render+sim
 
+# Capture the pause menu / settings page headlessly, to verify the overlay.
+./build/elemancer --menushot menu.bmp
+./build/elemancer --menushot settings.bmp --menusettings
+
 # Draw the controls HUD into the capture (otherwise HUD is interactive-only)
 ./build/elemancer --shot out.bmp --hud
 
@@ -67,7 +71,12 @@ through a peak cursor speed of ~8; beyond that the tail trails and stretches
 | `R` | Reset |
 | `S` | Save settings now |
 | `Tab` | Show / hide the on-screen controls |
-| `Esc` | Quit |
+| `Esc` | Pause menu — Resume, Settings, Exit |
+
+Escape pauses the simulation and opens a centered menu with **Resume**,
+**Settings** and **Exit Elemancer**. The Settings page has a slider for every
+tunable (drag it, or Ctrl+Click to type an exact value); changes take effect the
+instant you resume and are saved to `elemancer.cfg`.
 
 The tuning keys scale their value while held; the current values are shown both
 in an on-screen HUD panel and in the window title bar.
@@ -137,8 +146,10 @@ workspace needs the same files at that parent's root.
 ## Layout
 
 - `src/sim/` — SPH solver. No graphics dependency, so it runs headless in tests.
-- `src/main.cpp` — window, input, settings persistence, and the draw loop.
+- `src/main.cpp` — window, input, pause menu, settings persistence, draw loop.
 - `src/render/Hud.*` — controls overlay, via `external/stb_easy_font.h`.
+- `external/imgui/` — Dear ImGui (vendored, v1.91.5), for the pause menu and
+  settings sliders. Compiled from source into the exe, so it adds no runtime DLL.
 - `shaders/` — loaded from disk at runtime; edit and rerun without recompiling.
 - `tests/` — headless solver checks.
 

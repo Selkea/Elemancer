@@ -25,6 +25,10 @@
 #include "render/Hud.h"
 #include "sim/Fluid.h"
 
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -167,7 +171,7 @@ glm::vec3 cursorOnPlane(GLFWwindow* win, const glm::mat4& view, const glm::mat4&
 // dialled in by feel survives a restart. Deliberately not loaded in --shot
 // mode, which stays on the compiled defaults so headless verification is
 // reproducible. The file is a plain "key value" list, hand-editable.
-void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity) {
+void saveConfig(const std::string& path, const elem::FluidParams& p, float clarity, float spray) {
     std::ofstream f(path, std::ios::trunc);
     if (!f) {
         std::fprintf(stderr, "[elemancer] could not write %s\n", path.c_str());
@@ -179,10 +183,11 @@ void saveConfig(const std::string& path, const elem::FluidParams& p, float clari
       << "drag " << p.drag << "\n"
       << "holdRadius " << p.wellHoldRadius << "\n"
       << "clarity " << clarity << "\n"
-      << "spin " << p.spinRate << "\n";
+      << "spin " << p.spinRate << "\n"
+      << "spray " << spray << "\n";
 }
 
-bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity) {
+bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity, float& spray) {
     std::ifstream f(path);
     if (!f) return false;
 
@@ -196,6 +201,7 @@ bool loadConfig(const std::string& path, elem::FluidParams& p, float& clarity) {
         else if (key == "holdRadius") p.wellHoldRadius = v;
         else if (key == "clarity") clarity = v;
         else if (key == "spin") p.spinRate = v;
+        else if (key == "spray") spray = v;
     }
     return true;
 }
@@ -206,7 +212,7 @@ std::vector<std::string> hudControlLines() {
         "Mouse: move well    LMB: pull/grab    RMB: repel    Scroll: zoom",
         "[ ] tension     - = well     , . viscosity     ; ' drag",
         "9 0 hold radius     O P clarity     K L spin",
-        "G gravity mode (LMB grabs)   R reset   S save   Tab hide   Esc quit",
+        "G gravity mode (LMB grabs)   R reset   S save   Tab hide   Esc menu",
     };
 }
 
@@ -228,6 +234,76 @@ struct KeyEdge {
         return fired;
     }
 };
+
+// State of the Escape-triggered pause menu.
+struct UiState {
+    bool paused = false;
+    bool showSettings = false;
+    bool exitRequested = false;
+};
+
+// One centered ImGui slider that keeps a HUD-hotkey range in sync. Ctrl+Click
+// to type an exact value; AlwaysClamp keeps a typed value inside the range so a
+// stray keystroke cannot detonate the solver.
+void settingSlider(const char* label, float* v, float lo, float hi, const char* fmt) {
+    ImGui::SliderFloat(label, v, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp);
+}
+
+// The Escape pause menu and its settings page, drawn with Dear ImGui over the
+// frozen scene. Slider edits write straight into the live params, so they take
+// effect the instant the sim resumes; the caller persists them to elemancer.cfg.
+void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::DiffuseParams& D) {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Dim the paused scene so the menu reads clearly on top of it.
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize,
+                                                  IM_COL32(6, 10, 16, 160));
+
+    const ImVec2 center(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+    if (!ui.showSettings) {
+        ImGui::Begin("##pause", nullptr,
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoTitleBar);
+
+        const auto centeredText = [](const char* s) {
+            ImGui::SetCursorPosX((ImGui::GetWindowSize().x - ImGui::CalcTextSize(s).x) * 0.5f);
+            ImGui::TextUnformatted(s);
+        };
+        centeredText("ELEMANCER");
+        centeredText("Paused");
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
+
+        const ImVec2 b(220.0f, 36.0f);
+        if (ImGui::Button("Resume", b)) { ui.paused = false; ui.showSettings = false; }
+        if (ImGui::Button("Settings", b)) ui.showSettings = true;
+        if (ImGui::Button("Exit Elemancer", b)) ui.exitRequested = true;
+        ImGui::End();
+    } else {
+        ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Always);
+        ImGui::Begin("Settings", nullptr,
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoCollapse);
+        ImGui::TextDisabled("Drag a slider, or Ctrl+Click to type a value.");
+        ImGui::Spacing();
+        settingSlider("Surface tension", &P.surfaceTension, 0.005f, 2.5f, "%.3f");
+        settingSlider("Well strength", &P.wellStiffness, 3.0f, 200.0f, "%.1f");
+        settingSlider("Viscosity", &P.viscosity, 0.1f, 60.0f, "%.1f");
+        settingSlider("Drag", &P.drag, 0.01f, 5.0f, "%.2f");
+        settingSlider("Hold radius", &P.wellHoldRadius, 0.2f, 6.0f, "%.2f");
+        settingSlider("Clarity", &absorption, 0.02f, 2.5f, "%.2f");
+        settingSlider("Spin", &P.spinRate, 0.0f, 12.0f, "%.1f");
+        settingSlider("Spray amount", &D.spawnRate, 0.0f, 2000.0f, "%.0f");
+        ImGui::Spacing();
+        ImGui::Separator();
+        if (ImGui::Button("Back", ImVec2(140.0f, 32.0f))) ui.showSettings = false;
+        ImGui::SameLine();
+        if (ImGui::Button("Exit Elemancer", ImVec2(160.0f, 32.0f))) ui.exitRequested = true;
+        ImGui::End();
+    }
+}
 
 }  // namespace
 
@@ -255,6 +331,8 @@ int main(int argc, char** argv) {
     bool benchNoSpray = false;
     float benchHz = 1.0f;  // gesture frequency; higher = sharper flicks, more spray
     bool benchSprayFlood = false;  // force max spray generation, to measure its cost
+    std::string menuShotPath;      // capture the pause menu headlessly, for verification
+    bool menuShotSettings = false;  // capture the settings page instead of the buttons
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -303,6 +381,10 @@ int main(int argc, char** argv) {
             benchHz = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--sprayflood") {
             benchSprayFlood = true;
+        } else if (a == "--menushot" && i + 1 < argc) {
+            menuShotPath = argv[++i];
+        } else if (a == "--menusettings") {
+            menuShotSettings = true;
         }
     }
 
@@ -314,7 +396,8 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    if (shotMode || benchFrames > 0) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    if (shotMode || benchFrames > 0 || !menuShotPath.empty())
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow* win = glfwCreateWindow(kWidth, kHeight, "Elemancer", nullptr, nullptr);
     if (!win) {
@@ -333,6 +416,17 @@ int main(int argc, char** argv) {
     glGetError();  // GLEW's loader leaves a benign INVALID_ENUM behind.
     glfwSwapInterval(1);
     glfwSetScrollCallback(win, scrollCallback);
+
+    // Dear ImGui for the pause menu / settings panel. Installed after our scroll
+    // callback so its GLFW backend chains to ours rather than replacing it.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;  // no imgui.ini scribbled into the cwd
+    ImGui::StyleColorsDark();
+    ImGui::GetStyle().ScaleAllSizes(1.15f);
+    ImGui::GetIO().FontGlobalScale = 1.2f;
+    ImGui_ImplGlfw_InitForOpenGL(win, true);
+    ImGui_ImplOpenGL3_Init("#version 130");
 
     std::printf("[elemancer] GL %s | %s\n",
                 reinterpret_cast<const char*>(glGetString(GL_VERSION)),
@@ -368,6 +462,52 @@ int main(int argc, char** argv) {
         return glm::perspective(glm::radians(kFovDegrees),
                                 static_cast<float>(fbw) / static_cast<float>(fbh), 0.05f, 100.0f);
     };
+
+    // Headless capture of the pause menu (or its settings page) over a settled
+    // body, so the overlay's layout and centering can be verified without a
+    // display, the same way --shot verifies the fluid.
+    if (!menuShotPath.empty()) {
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(win, &fbw, &fbh);
+        fluid.setBounds(boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), shotDist));
+        fluid.setAttractor(glm::vec3(0.0f), true);
+        for (int i = 0; i < 200; ++i) {
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
+        }
+        // Twice: an auto-resizing ImGui window is hidden on its first frame while
+        // it measures its size, so a single frame would capture only the dimmed
+        // scene. The second frame draws the menu at its settled size.
+        UiState ui;
+        ui.paused = true;
+        ui.showSettings = menuShotSettings;
+        for (int f = 0; f < 2; ++f) {
+            renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view,
+                            projFor(fbw, fbh), fbw, fbh, 6.0f);
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            drawPauseUI(ui, fluid.params(), renderer.settings().absorption, fluid.diffuse());
+            ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
+        glFinish();
+
+        std::vector<unsigned char> px(static_cast<std::size_t>(fbw) * fbh * 3);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_BACK);
+        glReadPixels(0, 0, fbw, fbh, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+        const bool ok = saveBMP(menuShotPath, fbw, fbh, px);
+        std::printf("MENUSHOT file=%s settings=%d %dx%d saved=%d\n", menuShotPath.c_str(),
+                    menuShotSettings ? 1 : 0, fbw, fbh, ok ? 1 : 0);
+
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        renderer.shutdown();
+        glfwDestroyWindow(win);
+        glfwTerminate();
+        return ok ? 0 : 1;
+    }
 
     // Timing bench: settle the body, then whip the well across a fixed *fraction
     // of the screen* at a fixed gesture frequency, and time step() and render()
@@ -705,7 +845,8 @@ int main(int argc, char** argv) {
 
     // Restore any values tuned in a previous session, then keep them saved.
     const std::string cfgPath = assetDir + "/elemancer.cfg";
-    if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption)) {
+    if (loadConfig(cfgPath, fluid.params(), renderer.settings().absorption,
+                   fluid.diffuse().spawnRate)) {
         std::printf("[elemancer] loaded settings from elemancer.cfg\n");
     }
 
@@ -719,7 +860,9 @@ int main(int argc, char** argv) {
     bool showHud = true;
     const std::vector<std::string> hudLines = hudControlLines();
 
-    KeyEdge gravityKey, resetKey, saveKey, hudKey;
+    KeyEdge gravityKey, resetKey, saveKey, hudKey, escKey;
+    UiState ui;
+    bool wasPaused = false;  // to persist settings the moment the menu is dismissed
 
     // Camera dolly, driven by the scroll wheel.
     float camDistance = kCamDistance;
@@ -733,7 +876,16 @@ int main(int argc, char** argv) {
 
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
-        if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
+
+        // Escape opens the pause menu (was: quit). From the settings page it steps
+        // back to the buttons; from the buttons it resumes. Ignored while typing a
+        // value into a slider, where ImGui already uses Escape to cancel the edit.
+        const bool escPressed = escKey.justPressed(win, GLFW_KEY_ESCAPE);
+        if (escPressed && !ImGui::GetIO().WantTextInput) {
+            if (!ui.paused) { ui.paused = true; ui.showSettings = false; }
+            else if (ui.showSettings) ui.showSettings = false;
+            else ui.paused = false;
+        }
 
         const auto now = std::chrono::high_resolution_clock::now();
         const float frameDt =
@@ -745,67 +897,93 @@ int main(int argc, char** argv) {
         if (fbw == 0 || fbh == 0) continue;
 
         // Scroll to dolly the camera. Multiplicative so the zoom feels even at
-        // any distance; scroll up zooms in.
+        // any distance; scroll up zooms in. Drained even while paused so a wheel
+        // nudge over the menu does not jump the zoom on resume.
         if (g_scrollY != 0.0) {
-            camDistance = std::clamp(
-                camDistance * std::exp(static_cast<float>(-g_scrollY) * 0.12f), 1.8f, 24.0f);
+            if (!ui.paused) {
+                camDistance = std::clamp(
+                    camDistance * std::exp(static_cast<float>(-g_scrollY) * 0.12f), 1.8f, 24.0f);
+            }
             g_scrollY = 0.0;
         }
         const glm::mat4 view = viewFor(camDistance);
-
-        elem::FluidParams& P = fluid.params();
-        holdAdjust(win, GLFW_KEY_LEFT_BRACKET, GLFW_KEY_RIGHT_BRACKET, P.surfaceTension, 1.5f,
-                   frameDt, 0.005f, 2.5f);
-        holdAdjust(win, GLFW_KEY_MINUS, GLFW_KEY_EQUAL, P.wellStiffness, 1.5f, frameDt, 3.0f,
-                   200.0f);
-        holdAdjust(win, GLFW_KEY_COMMA, GLFW_KEY_PERIOD, P.viscosity, 1.5f, frameDt, 0.1f, 60.0f);
-        holdAdjust(win, GLFW_KEY_SEMICOLON, GLFW_KEY_APOSTROPHE, P.drag, 1.5f, frameDt, 0.01f,
-                   5.0f);
-        // Hold radius is the breakup threshold: raise it and the liquid stays
-        // together through faster flicks.
-        holdAdjust(win, GLFW_KEY_9, GLFW_KEY_0, P.wellHoldRadius, 1.5f, frameDt, 0.2f, 6.0f);
-        // Clarity: absorption tints and darkens the light through the liquid,
-        // so O clears it toward glass and P deepens the colour.
-        holdAdjust(win, GLFW_KEY_O, GLFW_KEY_P, renderer.settings().absorption, 1.5f, frameDt,
-                   0.02f, 2.5f);
-        // Linear so it can reach exactly zero (exponential scaling never can).
-        if (glfwGetKey(win, GLFW_KEY_K) == GLFW_PRESS) P.spinRate -= 5.0f * frameDt;
-        if (glfwGetKey(win, GLFW_KEY_L) == GLFW_PRESS) P.spinRate += 5.0f * frameDt;
-        P.spinRate = std::clamp(P.spinRate, 0.0f, 12.0f);
-
-        if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
-        if (gravityKey.justPressed(win, GLFW_KEY_G)) gravityMode = !gravityMode;
-        if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
-        if (saveKey.justPressed(win, GLFW_KEY_S)) {
-            saveConfig(cfgPath, P, renderer.settings().absorption);
-            std::printf("[elemancer] saved settings to elemancer.cfg\n");
-        }
-
         const glm::mat4 proj = projFor(fbw, fbh);
-        fluid.setBounds(
-            boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), camDistance));
-        const glm::vec3 cursor = cursorOnPlane(win, view, proj);
-        const bool lmb = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        const bool rmb = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        elem::FluidParams& P = fluid.params();
 
-        if (gravityMode) {
-            // Gravity mode: the liquid falls and pools on the floor. The well is
-            // released, so hold LMB to grab it back up (RMB still repels).
-            P.gravity = glm::vec3(0.0f, -kGravity, 0.0f);
-            fluid.setAttractor(cursor, lmb || rmb);
-            fluid.setWellScale(rmb ? -1.0f : 1.5f);
-        } else {
-            // Follow mode: the well always holds the liquid at the cursor.
-            P.gravity = glm::vec3(0.0f);
-            fluid.setAttractor(cursor, true);
-            fluid.setWellScale(rmb ? -1.0f : lmb ? 3.0f : 1.0f);
+        // The whole live simulation -- input, tuning hotkeys and stepping -- is
+        // frozen while the pause menu is up; only rendering and the menu run.
+        if (!ui.paused) {
+            holdAdjust(win, GLFW_KEY_LEFT_BRACKET, GLFW_KEY_RIGHT_BRACKET, P.surfaceTension, 1.5f,
+                       frameDt, 0.005f, 2.5f);
+            holdAdjust(win, GLFW_KEY_MINUS, GLFW_KEY_EQUAL, P.wellStiffness, 1.5f, frameDt, 3.0f,
+                       200.0f);
+            holdAdjust(win, GLFW_KEY_COMMA, GLFW_KEY_PERIOD, P.viscosity, 1.5f, frameDt, 0.1f,
+                       60.0f);
+            holdAdjust(win, GLFW_KEY_SEMICOLON, GLFW_KEY_APOSTROPHE, P.drag, 1.5f, frameDt, 0.01f,
+                       5.0f);
+            // Hold radius is the breakup threshold: raise it and the liquid stays
+            // together through faster flicks.
+            holdAdjust(win, GLFW_KEY_9, GLFW_KEY_0, P.wellHoldRadius, 1.5f, frameDt, 0.2f, 6.0f);
+            // Clarity: absorption tints and darkens the light through the liquid,
+            // so O clears it toward glass and P deepens the colour.
+            holdAdjust(win, GLFW_KEY_O, GLFW_KEY_P, renderer.settings().absorption, 1.5f, frameDt,
+                       0.02f, 2.5f);
+            // Linear so it can reach exactly zero (exponential scaling never can).
+            if (glfwGetKey(win, GLFW_KEY_K) == GLFW_PRESS) P.spinRate -= 5.0f * frameDt;
+            if (glfwGetKey(win, GLFW_KEY_L) == GLFW_PRESS) P.spinRate += 5.0f * frameDt;
+            P.spinRate = std::clamp(P.spinRate, 0.0f, 12.0f);
+
+            if (resetKey.justPressed(win, GLFW_KEY_R)) fluid.init(particleCount);
+            if (gravityKey.justPressed(win, GLFW_KEY_G)) gravityMode = !gravityMode;
+            if (hudKey.justPressed(win, GLFW_KEY_TAB)) showHud = !showHud;
+            if (saveKey.justPressed(win, GLFW_KEY_S)) {
+                saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate);
+                std::printf("[elemancer] saved settings to elemancer.cfg\n");
+            }
+
+            fluid.setBounds(
+                boundsForView(static_cast<float>(fbw) / static_cast<float>(fbh), camDistance));
+            const glm::vec3 cursor = cursorOnPlane(win, view, proj);
+            const bool lmb = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            const bool rmb = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+            if (gravityMode) {
+                // Gravity mode: the liquid falls and pools on the floor. The well is
+                // released, so hold LMB to grab it back up (RMB still repels).
+                P.gravity = glm::vec3(0.0f, -kGravity, 0.0f);
+                fluid.setAttractor(cursor, lmb || rmb);
+                fluid.setWellScale(rmb ? -1.0f : 1.5f);
+            } else {
+                // Follow mode: the well always holds the liquid at the cursor.
+                P.gravity = glm::vec3(0.0f);
+                fluid.setAttractor(cursor, true);
+                fluid.setWellScale(rmb ? -1.0f : lmb ? 3.0f : 1.0f);
+            }
+
+            for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
         }
-
-        for (int s = 0; s < kSubSteps; ++s) fluid.step(kDt);
 
         renderer.render(fluid.positions(), fluid.sprayPositions(), fluid.sprayLife(), view, proj,
                         fbw, fbh, static_cast<float>(glfwGetTime()));
-        if (showHud) hud.draw(hudLines, fbw, fbh);
+        if (showHud && !ui.paused) hud.draw(hudLines, fbw, fbh);
+
+        // Pause menu / settings, over the frozen scene.
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        if (ui.paused)
+            drawPauseUI(ui, P, renderer.settings().absorption, fluid.diffuse());
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // Persist the moment the menu is dismissed (Resume/Esc) or Exit is chosen,
+        // so slider edits survive even a hard quit.
+        if ((wasPaused && !ui.paused) || ui.exitRequested) {
+            saveConfig(cfgPath, P, renderer.settings().absorption, fluid.diffuse().spawnRate);
+        }
+        wasPaused = ui.paused;
+        if (ui.exitRequested) break;
+
         glfwSwapBuffers(win);
 
         fpsAccum += frameDt;
@@ -831,9 +1009,12 @@ int main(int argc, char** argv) {
     }
 
     // Persist whatever was tuned this session.
-    saveConfig(cfgPath, fluid.params(), renderer.settings().absorption);
+    saveConfig(cfgPath, fluid.params(), renderer.settings().absorption, fluid.diffuse().spawnRate);
     std::printf("[elemancer] saved settings to elemancer.cfg\n");
 
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     hud.shutdown();
     renderer.shutdown();
     glfwDestroyWindow(win);

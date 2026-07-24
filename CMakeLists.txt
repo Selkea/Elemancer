@@ -25,9 +25,25 @@ if(OpenMP_CXX_FOUND)
   target_link_libraries(elemancer_sim PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
+# Dear ImGui (vendored in external/imgui, v1.91.5) for the in-app pause menu and
+# settings panel. Compiled from source into a static lib, so it adds no runtime
+# DLL and the shareable build is unchanged. The OpenGL3 backend uses its own
+# embedded GL loader, which coexists with GLEW.
+add_library(imgui STATIC
+  external/imgui/imgui.cpp
+  external/imgui/imgui_draw.cpp
+  external/imgui/imgui_tables.cpp
+  external/imgui/imgui_widgets.cpp
+  external/imgui/backends/imgui_impl_glfw.cpp
+  external/imgui/backends/imgui_impl_opengl3.cpp)
+target_include_directories(imgui PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/backends)
+target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+
 add_executable(elemancer src/main.cpp src/render/FluidRenderer.cpp src/render/Hud.cpp)
 target_include_directories(elemancer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external)
-target_link_libraries(elemancer PRIVATE elemancer_sim OpenGL::GL glfw GLEW::GLEW)
+target_link_libraries(elemancer PRIVATE elemancer_sim OpenGL::GL glfw GLEW::GLEW imgui)
 target_compile_definitions(elemancer PRIVATE
   ELEMANCER_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
