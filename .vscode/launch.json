@@ -19,6 +19,11 @@
           "comment": "glfw3/glew32/libstdc++ DLLs live here; without this the exe will not start",
           "name": "PATH",
           "value": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+        },
+        {
+          "comment": "Sleep OpenMP threads at the substep barriers instead of spinning, so the GPU driver/compositor get the cores back between passes on this hybrid CPU. Isolated-neutral; may reclaim a little in the live window. Remove this entry to A/B (watch the title's sim ms).",
+          "name": "OMP_WAIT_POLICY",
+          "value": "passive"
         }
       ],
       "setupCommands": [

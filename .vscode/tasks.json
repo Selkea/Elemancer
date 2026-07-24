@@ -42,7 +42,8 @@
       "command": "${workspaceFolder}/build/elemancer.exe",
       "options": {
         "cwd": "${workspaceFolder}",
-        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" },
+        "//OMP_WAIT_POLICY": "passive sleeps OpenMP threads at the substep barriers instead of spinning, freeing cores for the GPU driver on this hybrid CPU. Isolated-neutral; remove to A/B via the title's sim ms.",
+        "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}", "OMP_WAIT_POLICY": "passive" },
         "statusbar": {
           "hide": false,
           "label": "$(run) Elemancer",
