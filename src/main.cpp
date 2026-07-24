@@ -299,8 +299,6 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
         ImGui::Spacing();
         ImGui::Separator();
         if (ImGui::Button("Back", ImVec2(140.0f, 32.0f))) ui.showSettings = false;
-        ImGui::SameLine();
-        if (ImGui::Button("Exit Elemancer", ImVec2(160.0f, 32.0f))) ui.exitRequested = true;
         ImGui::End();
     }
 }
