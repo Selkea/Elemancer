@@ -26,6 +26,14 @@
 #include <omp.h>
 #endif
 
+#if defined(_WIN32)
+// From winmm. Raise the OS timer resolution to 1 ms so the frame limiter's short
+// sleeps are precise -- the default granularity is ~15 ms, which overshoots the
+// cap and leaves the rate fluctuating below it. Declared here to avoid pulling
+// all of <windows.h> (and its min/max macros) into this file.
+extern "C" unsigned int __stdcall timeBeginPeriod(unsigned int);
+#endif
+
 #include "render/FluidRenderer.h"
 #include "render/Hud.h"
 #include "sim/Fluid.h"
@@ -408,6 +416,9 @@ int main(int argc, char** argv) {
                      "[elemancer] This build needs a CPU with AVX2 (Intel 2013+/AMD 2017+).\n");
         return 1;
     }
+#endif
+#if defined(_WIN32)
+    timeBeginPeriod(1);  // 1 ms timer so the frame limiter can pace precisely
 #endif
 #ifdef _OPENMP
     // Leave a quarter of the logical cores for the GPU driver and compositor.
@@ -1272,19 +1283,23 @@ int main(int argc, char** argv) {
         glfwSwapBuffers(win);
 
         // Software frame limiter: when a cap is set, hold this frame to 1/cap
-        // since it began (vsync is off in this mode). Sleep the bulk, then spin
-        // the last ~1 ms so the pacing is even and the rate steady, rather than
-        // floating with per-frame compute jitter. Only engages when the machine
-        // is running faster than the cap; a heavier frame just runs uncapped.
+        // since it began (VSync Off in this mode). Nap in 1 ms slices while more
+        // than 2 ms remain -- the 1 ms OS timer set at startup keeps naps precise
+        // -- then busy-spin the last ~2 ms so the frame lands ON the target, not
+        // past it. Overshooting was what left the rate fluctuating below the cap;
+        // re-checking the clock each iteration absorbs any nap jitter. Only
+        // engages when the frame beat the cap; a heavier frame just runs uncapped.
         if (fpsCap > 0) {
             const auto target =
                 last + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
                            std::chrono::duration<double>(1.0 / fpsCap));
-            const auto slack = std::chrono::high_resolution_clock::now();
-            if (target - slack > std::chrono::milliseconds(2)) {
-                std::this_thread::sleep_for(target - slack - std::chrono::milliseconds(1));
+            for (;;) {
+                const auto t = std::chrono::high_resolution_clock::now();
+                if (t >= target) break;
+                if (target - t > std::chrono::milliseconds(2))
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                // else: fall through to a tight spin, re-checking the clock
             }
-            while (std::chrono::high_resolution_clock::now() < target) { /* spin the tail */ }
         }
 
         fpsAccum += frameDt;
