@@ -103,10 +103,16 @@ constexpr float kDt = 1.0f / 512.0f;
 // before, only now steady regardless of fps. Raise it to run the whole sim
 // faster, lower it for slower; 1.0 would be true real time. Each step is still
 // kDt, so stability is unchanged -- only the step *count* per frame varies.
-// A frame is capped at kMaxSubStepsPerFrame steps so a hitch (window drag, a
-// stall) cannot cascade into a longer frame and spiral.
+// A frame is capped at kMaxSubStepsPerFrame steps. This bound is load-bearing,
+// not just a hitch guard: the substep *count* grows with frameDt, so if the
+// per-substep cost creeps up (the body settling denser, or an FPS cap making the
+// frame longer) the frame demands more substeps, which lengthens it further -- a
+// spiral. A high ceiling let a settled body balloon to ~80 ms (12 fps, "hung")
+// after ~30-60 s. 16 keeps the worst case near ~30 ms: the sim degrades to slow
+// motion under load instead of freezing, and 16 still covers the full 1.875x rate
+// down to a 60 fps cap (960/60), so normal play is unaffected.
 constexpr float kSimSecondsPerRealSecond = 120.0f / 64.0f;  // ~1.875
-constexpr int kMaxSubStepsPerFrame = 40;
+constexpr int kMaxSubStepsPerFrame = 16;
 
 constexpr float kFovDegrees = 45.0f;
 constexpr float kCamDistance = 5.0f;
@@ -1309,8 +1315,12 @@ int main(int argc, char** argv) {
                             remain - std::chrono::milliseconds(1))
                             .count() /
                         100);
+                    // Bounded wait (never INFINITE): if the timer somehow doesn't
+                    // signal, fall back to the clock re-check rather than hang.
+                    const DWORD waitMs = static_cast<DWORD>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(remain).count() + 2);
                     if (SetWaitableTimer(frameTimer, &due, 0, nullptr, nullptr, FALSE))
-                        WaitForSingleObject(frameTimer, INFINITE);
+                        WaitForSingleObject(frameTimer, waitMs);
                 }
                 // else: fall through to a tight spin, re-checking the clock
 #endif
