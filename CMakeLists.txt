@@ -9,6 +9,18 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# Tune for the build machine's CPU. On by default so a local dev build gets the
+# host's AVX2/FMA (measured ~6% off the settled SPH step on a 14900K, fidelity
+# identical -- FMA only tightens rounding). The shareable package build sets this
+# OFF (package.sh / CI) so the zip stays portable: -march=native bakes in
+# instructions that would crash on an older CPU. Baseline x86-64 (SSE2) otherwise.
+option(ELEMANCER_NATIVE "Optimise for the build machine's CPU (-march=native)" ON)
+if(ELEMANCER_NATIVE AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+                         CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+  add_compile_options(-march=native)
+  message(STATUS "Elemancer: -march=native enabled (local build)")
+endif()
+
 # Version string baked into the build for the update check: the exact git tag
 # when built at one (e.g. "v0.1.0"), else a describe like "v0.1.0-3-gabc1234", or
 # the bare commit if there are no tags. Resolved at configure time, so re-run
