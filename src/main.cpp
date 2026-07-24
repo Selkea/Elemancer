@@ -21,6 +21,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "render/FluidRenderer.h"
 #include "render/Hud.h"
 #include "sim/Fluid.h"
@@ -360,6 +364,19 @@ void drawPauseUI(UiState& ui, elem::FluidParams& P, float& absorption, elem::Dif
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _OPENMP
+    // Leave a quarter of the logical cores for the GPU driver and compositor.
+    // The SPH step scales out to ~3/4 of the cores and then flattens (it turns
+    // memory-bandwidth bound), so those last threads add nothing to the sim but,
+    // by pinning every core to 100%, they starve the render pipeline -- which is
+    // why the same settled body that costs ~5 ms headless cost ~10-13 ms in the
+    // live window. Capping frees the P-core hyperthread siblings for the driver
+    // at no measured cost to the sim (24 vs 32 threads bench-identical here).
+    // OMP_NUM_THREADS, if the user sets it, still wins (for tuning sweeps).
+    if (!std::getenv("OMP_NUM_THREADS")) {
+        omp_set_num_threads(std::max(2, omp_get_num_procs() * 3 / 4));
+    }
+#endif
     bool shotMode = false;
     std::string shotPath = "elemancer_shot.bmp";
     int particleCount = 6000;
@@ -494,7 +511,19 @@ int main(int argc, char** argv) {
         return 1;
     }
     glGetError();  // GLEW's loader leaves a benign INVALID_ENUM behind.
-    glfwSwapInterval(1);
+    // Adaptive vsync: sync to the refresh when a frame beats it (no tearing at
+    // the cap), but let a frame that overruns the refresh present immediately
+    // instead of waiting a whole extra interval. At 240 Hz that matters -- plain
+    // vsync snaps any frame over 4.17 ms straight down to 120/80/60, so a settled
+    // body that cannot quite hit 240 dropped to a jarring ~70-85; adaptive lets it
+    // run at its true rate (~150-200) and only tears when below the cap, which is
+    // hard to see at 240. Falls back to hard vsync where tear control is absent.
+    if (glfwExtensionSupported("WGL_EXT_swap_control_tear") ||
+        glfwExtensionSupported("GLX_EXT_swap_control_tear")) {
+        glfwSwapInterval(-1);
+    } else {
+        glfwSwapInterval(1);
+    }
     glfwSetScrollCallback(win, scrollCallback);
 
     // Dear ImGui for the pause menu / settings panel. Installed after our scroll
